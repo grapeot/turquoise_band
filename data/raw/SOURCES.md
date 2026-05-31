@@ -27,7 +27,33 @@
 - 备选高清：color 8k/16k、displacement 64px/deg（URL 见 working.md，未下载）
 - 回退：`moon-map-from-the-clementine-mission.png`（Clementine 1024×512 灰度）
 
-## 太阳谱 — 待下载（可选 L1 升级）
-- 计划：ASTM E-490 AM0 (NREL, W/m²/nm) 或 SAO2010 高分辨率
-- 当前 v1 用 5772K 黑体近似（science review 确认对色相趋势足够）
-- NREL: https://www.nrel.gov/grid/data/assets/data/e490_00a_amo.xls
+## 太阳谱 — `sao2010_solref.dat`（真实测量 AM0 太阳谱，已下载）
+- 来源：SAO2010 / Chance & Kurucz 2010 高分辨率太阳参考谱，Harvard-Smithsonian CfA Atmospheric Spectroscopy 组发布
+- 直链：http://www.cfa.harvard.edu/atmosphere/links/sao2010.solref.converted （下载时 HTTP 200，text/plain）
+- 引用：Chance, K. and Kurucz, R.L., "An improved high-resolution solar reference spectrum for Earth's atmosphere measurements in the ultraviolet, visible, and near infrared", J. Quant. Spectrosc. Radiat. Transfer 111, 1289-1295 (2010)
+- 这是 AM0（大气外）太阳谱，0.01nm 高分辨率，能分辨 Fraunhofer 吸收线——比 5772K 黑体更接近真实蓝端衰减。
+
+### 格式（可直接 numpy.loadtxt 解析）
+- 5 行文本头（4 行列说明 + 1 行空行），**加载时 `skiprows=5`**，空白分隔。
+- 4 列：
+  - 列1 = **真空波长 (nm)**（注意是真空波长，不是空气波长；与 o3_serdyuchenko 一致，无需互转）
+  - 列2 = 光子辐照度 photons·s⁻¹·cm⁻²·nm⁻¹
+  - 列3 = **辐照度 W·m⁻²·nm⁻¹**（直接可用，渲染优先用这一列，无需任何转换）
+  - 列4 = 辐照度 W·m⁻²·cm（按波数，一般用不到）
+- 数据行 80093 行，波长范围 **200.07 – 1000.99 nm**，步长恒定 0.01nm。完整覆盖可见光 380–780nm。
+- 加载示例：`d = np.loadtxt('sao2010_solref.dat', skiprows=5); wl, irr = d[:,0], d[:,2]`
+
+### 单位换算（仅当想从列2自行推导列3时；已验证两列自洽，相对误差 <5e-6）
+- W/m²/nm = photons/cm²/s/nm × (h·c/λ) × 1e4
+  - h = 6.62607015e-34 J·s，c = 2.99792458e8 m/s，λ 用**米**（nm×1e-9）
+  - ×1e4 是 cm⁻² → m⁻² 的面积换算（1 m² = 1e4 cm²）
+
+### 与 5772K 黑体的差异（550nm 归一化后的相对比值，确认蓝端偏低）
+- 400nm: 0.92（真实太阳显著偏低，Fraunhofer 线密集 + Ca H&K/Balmer 吸收）
+- 450nm: 0.99，550nm: 1.00（基准），650nm: 0.93，700nm: 0.93
+- 这正是绿松石带颜色可能受影响的物理来源，替换黑体后应对比色相曲线确认无回归。
+
+### 关于 ASTM E-490（未下载，记录原因）
+- 原计划首选 ASTM E-490 AM0（W/m²/nm，~1nm），但其唯一权威宿主 NREL/rredc.nrel.gov 在当前环境 DNS 无法解析（HTTP 000），所有镜像（UMaine misclab、Sandia、pvlib）的数据链接都回指 NREL 或为 404。
+- pvlib 仅内置 ASTM **G173**（AM1.5 地面谱，含大气吸收），不是 AM0，不适用。
+- SAO2010 是更优替代：同为 AM0，分辨率高 100 倍，且自带 W/m²/nm 列。E-490 如日后需要，可手动从 NREL 网页下 e490_00a_amo.xls 补入。
