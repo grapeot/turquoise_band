@@ -19,3 +19,4 @@ data/raw/moon_texture/*.jpg
 .DS_Store
 outputs/*.tif
 outputs/*.heic
+data/raw/earth_texture/*.jpg

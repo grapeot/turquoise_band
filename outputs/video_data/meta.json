@@ -1,0 +1,44 @@
+{
+  "description": "月食视频物理数据（引擎无关）。左=月面看地球本影投影，右=站月面中心看地球。",
+  "n_frames": 360,
+  "D_range_arcmin": [
+    0.0,
+    60.0
+  ],
+  "angular_sizes_arcmin": {
+    "earth_radius": 57.03092550236299,
+    "sun_radius": 15.993679743684213,
+    "moon_radius": 15.537722604100306,
+    "umbra_radius": 41.186795105154374
+  },
+  "ring": {
+    "radial_maps_tangent_height_km": [
+      0,
+      30.0
+    ],
+    "true_thickness_frac": 0.012556898446083818,
+    "display_thickness_frac": 0.1,
+    "note": "环径向(内→外)=擦边高度0→30km=红→青绿→白(查 earth_ring_color)。真实厚度仅1.3%，展示放大~8×。"
+  },
+  "ring_azimuth_brightness": {
+    "formula": "bright(phi) = exp(-((dist_to_sun - earth_radius)/soft)^2)*0.7 + 0.05; soft=2.5*sun_radius",
+    "dist_to_sun": "limb点(earth_radius·cos phi, ·sin phi) 到 太阳中心(D·cos sun_dir, D·sin sun_dir) 的角距",
+    "diamond_spike": "D+sun_radius>earth_radius 时朝太阳侧加强光; 见 render_earth.py",
+    "note": "D=0太阳正中→全圈均匀(360°日落环); D增大→朝太阳侧亮、背侧暗; D>edge→钻石环。"
+  },
+  "moon_disk": {
+    "color_lut": "moon_eclipse_color (角距→线性RGB)。月盘每像素按到本影中心角距查色。",
+    "geometry": "月心在距本影中心 D 处(frames.csv); 月盘半径见 angular_sizes。"
+  },
+  "assets": {
+    "moon_color": "data/raw/moon_texture/nasa_moon_color_lroc_4k_16bit.tif",
+    "moon_displacement": "data/raw/moon_texture/nasa_moon_displacement_lola_ldem16_float_km.tif",
+    "earth_night": "data/raw/earth_texture/earth_blackmarble_2016_3600x1800.jpg",
+    "earth_day": "data/raw/earth_texture/earth_bluemarble_topobathy_200407_5400x2700.jpg"
+  },
+  "conventions": {
+    "colorspace": "线性 sRGB(未 gamma)。渲染器自行 tone-map + gamma。",
+    "moon_render": "月面食光=反照率纹理 × 食光颜色(线性相乘); 见 render_textured.py",
+    "earth_render": "暗夜面(Black Marble自发光) + 体积大气环(径向查LUT,方位亮度调制)。"
+  }
+}
