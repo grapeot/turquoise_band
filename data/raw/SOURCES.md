@@ -19,6 +19,14 @@
 - 格式：无表头 CSV，列：波长(nm), x̄, ȳ, z̄。覆盖 360-830nm
 - 注：项目代码实际用 colour-science 库内置的等价 CMF；此文件留作独立校验
 
+## 月面纹理 — `moon_texture/`
+- **NASA CGI Moon Kit (SVS #4720)**，公有领域。页面 https://svs.gsfc.nasa.gov/4720
+  基础路径 https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/
+- `nasa_moon_color_lroc_4k_16bit.tif`：LROC WAC 彩色 albedo，4096×2048，16bit RGB，plate carrée，0°经度居中，近地面朝向观察者。渲染主力纹理。
+- `nasa_moon_displacement_lola_ldem16_float_km.tif`：LOLA 高程图（位移），5760×2880 float32，单位 km，相对 1737.4km。供将来 3D 立体/法线渲染。
+- 备选高清：color 8k/16k、displacement 64px/deg（URL 见 working.md，未下载）
+- 回退：`moon-map-from-the-clementine-mission.png`（Clementine 1024×512 灰度）
+
 ## 太阳谱 — 待下载（可选 L1 升级）
 - 计划：ASTM E-490 AM0 (NREL, W/m²/nm) 或 SAO2010 高分辨率
 - 当前 v1 用 5772K 黑体近似（science review 确认对色相趋势足够）

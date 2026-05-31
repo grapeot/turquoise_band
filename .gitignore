@@ -11,5 +11,9 @@ outputs/*.png
 outputs/*.mp4
 !outputs/.gitkeep
 
+# 大尺寸 NASA 月面纹理（公有领域，可按 data/raw/SOURCES.md 的 URL 重新下载）
+data/raw/moon_texture/*.tif
+data/raw/moon_texture/*.jpg
+
 # OS
 .DS_Store

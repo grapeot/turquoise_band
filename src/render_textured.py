@@ -33,33 +33,46 @@ sys.path.insert(0, os.path.dirname(__file__))
 import render as R   # 复用 LUT / 显示链 / 几何常数
 
 OUT = R.OUT
-TEX_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw",
-                        "moon_texture", "moon-map-from-the-clementine-mission.png")
+_TEXDIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "moon_texture")
+# NASA CGI Moon Kit (SVS #4720) LROC 彩色 4k；缺则回退 Clementine 灰度
+TEX_PATH = os.path.join(_TEXDIR, "nasa_moon_color_lroc_4k_16bit.tif")
+TEX_PATH_FALLBACK = os.path.join(_TEXDIR, "moon-map-from-the-clementine-mission.png")
 
 
 # ============================================================
 # 1. 反照率纹理：加载真实贴图，映射到物理反照率区间
 # ============================================================
 def load_albedo_texture(path=TEX_PATH, mare_target=0.07, highland_target=0.12):
-    """加载月面反照率灰度纹理，线性映射到月食文献常用的几何反照率区间。
+    """加载月面反照率纹理，线性映射到月食文献常用的几何反照率区间。
 
-    输入纹理为 plate carrée（等距柱状）灰度图，像素行=纬度(顶+90→底-90)，
-    列=经度(左-180→右+180，0 在中心)。原图灰度本身就是相对反照率，这里把它的
-    [maria 区间, highland 区间] 线性拉伸到 [mare_target, highland_target]，
-    用纹理自身的 5% / 95% 分位作为 maria/highland 的代表值，避免被个别极亮射纹拉偏。
+    优先 NASA CGI Moon Kit LROC 彩色 4k（16bit TIFF），取其亮度作为反照率调制；
+    缺则回退 Clementine 灰度。彩色图的真实月面色（月海偏蓝灰、高地偏暖）以低权重
+    保留为色偏，叠在物理食光颜色上增写实感（主色相仍由物理决定）。
 
-    返回 alb (H,W) float，单位=几何反照率（约 0.05–0.16）。
+    返回 (alb (H,W) 几何反照率, chroma (H,W,3) 纹理归一化色偏 或 None)。
     """
     from PIL import Image
-    im = Image.open(path).convert("L")
-    g = np.asarray(im, dtype=float) / 255.0
+    Image.MAX_IMAGE_PIXELS = None
+    use_path = path if os.path.exists(path) else TEX_PATH_FALLBACK
+    im = Image.open(use_path)
+
+    if im.mode in ("L", "I", "I;16"):
+        g = np.asarray(im.convert("F"), dtype=float)
+        g = g / (g.max() if g.max() > 0 else 1.0)
+        chroma = None
+    else:
+        arr = np.asarray(im.convert("RGB"), dtype=float)
+        arr = arr / (arr.max() if arr.max() > 0 else 1.0)
+        # 亮度作反照率；归一化色偏(除以自身亮度)作为月面本征色，低权重保留
+        g = 0.2126 * arr[..., 0] + 0.7152 * arr[..., 1] + 0.0722 * arr[..., 2]
+        gn = np.maximum(g, 1e-4)[..., None]
+        chroma = arr / gn                          # 月海/高地的相对色偏，≈1 为中性
 
     lo = np.percentile(g, 5.0)    # 代表月海（暗）
     hi = np.percentile(g, 95.0)   # 代表高地（亮）
-    # 线性映射 g∈[lo,hi] → [mare_target, highland_target]，端外自然外推后再钳
     alb = mare_target + (g - lo) / max(hi - lo, 1e-6) * (highland_target - mare_target)
     alb = np.clip(alb, 0.03, 0.18)
-    return alb
+    return alb, chroma
 
 
 def sample_albedo_orthographic(alb_tex, U, V, inside,
@@ -101,7 +114,7 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
     # 归一到 [-pi,pi]
     lon = (lon + np.pi) % (2 * np.pi) - np.pi
 
-    H, W = alb_tex.shape
+    H, W = alb_tex.shape[:2]
     # plate carrée 反查：列=经度(-180→+180 映 0→W)，行=纬度(+90→-90 映 0→H)
     col = (np.degrees(lon) + 180.0) / 360.0 * (W - 1)
     row = (90.0 - np.degrees(lat)) / 180.0 * (H - 1)
@@ -110,7 +123,7 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
     alb = alb_tex[ri, ci]
     alb = np.where(inside, alb, 0.0)
     mu = np.where(inside, z, 0.0)
-    return alb, mu
+    return alb, mu, (ri, ci)
 
 
 # ============================================================
@@ -118,7 +131,8 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 # ============================================================
 def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
-                          limb_power=0.45, target_srgb=0.34,
+                          limb_power=0.5, target_srgb=0.42,
+                          dyn_gamma=0.42, chroma_weight=0.5, saturation=0.92,
                           add_starfield=True, add_grain=True,
                           lut_kwargs=None, seed=7):
     """渲染写实月全食照片：真实月面反照率纹理 × 物理食光颜色。
@@ -165,31 +179,49 @@ def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
     # ---- 物理食光颜色（线性 XYZ，逐像素反向 RT，无 banding）----
     XYZ_phys = render_rt.shade(a, tables)                 # (S,S,3)
 
-    # ---- 月面反照率（正交投影采样）----
-    alb_tex = load_albedo_texture()
-    alb, mu = sample_albedo_orthographic(alb_tex, U, V, inside,
-                                         sub_lat_deg=sub_lat_deg, sub_lon_deg=sub_lon_deg)
-    # 归一到"高地≈1"，保持整体亮度量级与物理月盘一致；maria 按真实比例压暗
+    # ---- 月面反照率 + 真实月面色偏（正交投影采样）----
+    alb_tex, chroma_tex = load_albedo_texture()
+    alb, mu, (ri, ci) = sample_albedo_orthographic(alb_tex, U, V, inside,
+                                                   sub_lat_deg=sub_lat_deg, sub_lon_deg=sub_lon_deg)
     alb_ref = 0.12
     alb_norm = alb / alb_ref
 
     # ---- limb darkening（艺术：球面边缘自然变暗，µ=cosθ）----
     limb = np.power(np.clip(mu, 0.0, 1.0), limb_power)
 
-    # ---- 线性空间相乘：反照率 × 物理颜色 × limb ----
+    # ---- 物理动态范围压缩（关键：让影调像真照片，不像物理 raw）----
+    # 真实月食物理边-核差达 5-8 档(~2000×)，但摄影成品压到视觉 ~1.5-2.5 档(3:1~5:1)。
+    # 把物理亮度 Y 做幂律压缩 Y^g (g<1) 收窄动态范围，色度(色相)不动——这是"压档"的本质。
+    Yp = np.maximum(XYZ_phys[..., 1], 1e-30)
+    chroma_xyz = XYZ_phys / Yp[..., None]              # 保色相
+    Y_comp = np.power(Yp, dyn_gamma)                   # 幂律压缩亮度
+    XYZ_comp = chroma_xyz * Y_comp[..., None]
+
+    # ---- 线性空间相乘：反照率 × (压缩后物理颜色) × limb ----
     mod = (alb_norm * limb)[..., None]
-    XYZ_scene = XYZ_phys * mod
+    XYZ_scene = XYZ_comp * mod
 
     # ---- 全局统一曝光（按月盘红核侧标定，禁 per-pixel）----
-    # 红核侧 = 月盘最靠本影中心一点，反照率取高地参考(alb_norm≈1) 以稳定曝光
     a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["opp"]["a_lo"])
-    Y_dark = float(render_rt.shade(np.array([a_near]), tables)[0, 1])
+    Y_dark = float(np.power(render_rt.shade(np.array([a_near]), tables)[0, 1], dyn_gamma))
     t = np.clip(R._srgb_inv_gamma(target_srgb), 1e-4, 0.999)
     exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
 
     XYZ_disp = R._tone_map_on_Y(XYZ_scene, exposure)
     rgb = R._xyz_to_srgb_linear(XYZ_disp)
     rgb = np.clip(rgb, 0.0, None)
+
+    # ---- 叠加真实月面色偏（低权重，增写实，主色相仍由物理决定）----
+    if chroma_tex is not None and chroma_weight > 0:
+        ctex = chroma_tex[ri, ci]                       # (S,S,3) 月面本征色偏
+        ctex = 1.0 + chroma_weight * (ctex - 1.0)       # 朝中性收权重
+        rgb = rgb * ctex
+        rgb = np.clip(rgb, 0.0, None)
+
+    # ---- 饱和度微调（艺术：往中等铜橙靠，不要荧光血红）----
+    if saturation != 1.0:
+        luma = (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2])[..., None]
+        rgb = np.clip(luma + (rgb - luma) * saturation, 0.0, None)
 
     # ---- 星空背景（艺术，月盘外）----
     rgb = rgb * inside[..., None]
