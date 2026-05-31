@@ -20,3 +20,5 @@ data/raw/moon_texture/*.jpg
 outputs/*.tif
 outputs/*.heic
 data/raw/earth_texture/*.jpg
+outputs/video_frames/
+outputs/*.mp4
