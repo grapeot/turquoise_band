@@ -22,3 +22,4 @@ outputs/*.heic
 data/raw/earth_texture/*.jpg
 outputs/video_frames/
 outputs/*.mp4
+outputs/video_frames_hdr/

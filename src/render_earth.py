@@ -47,7 +47,7 @@ def _ring_color_table(n=400):
 
 def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
                        sun_dir_deg=0.0, earth_tex=None, ring_tables=None,
-                       fov=None, center=None, return_linear=False):
+                       fov=None, center=None, return_linear=False, draw_sun=True):
     """渲染一帧"从月面中心看地球"。
 
     D_arcmin: 月心距本影中心角距（= 太阳中心相对地球中心的偏移），0=正中本影。
@@ -65,7 +65,7 @@ def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
     cx, cy = center if center is not None else (0.0, 0.0)
     S = size * ssaa
     xs = np.linspace(cx - half, cx + half, S)
-    ys = np.linspace(cy - half, cy + half, S)
+    ys = np.linspace(cy + half, cy - half, S)   # 行0=高y(图顶), 让世界y朝上=图上(修方向翻转)
     X, Y = np.meshgrid(xs, ys)
     r = np.hypot(X, Y)                       # 距地球中心角距 (arcmin)
     phi = np.arctan2(Y, X)                   # 方位角
@@ -123,6 +123,19 @@ def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
     rgb_ring = rgb_ring / np.maximum(rgb_ring.max(axis=-1, keepdims=True), 1e-6)  # 饱和归一
     rgb_ring = rgb_ring * bright[..., None]         # 方位亮度调制
     rgb[in_ring] = rgb_ring[in_ring]
+
+    # === 太阳：露出地球缘的那部分(钻石环的"钻石") ===
+    # 太阳盘(中心 sx,sy, 半径 ANG_SUN)落在地球外(r>地球缘)的部分=可见太阳新月。
+    # 只在**全景**(draw_sun=True)画；特写(长焦)不画以免铺满。亮度不求真实(够亮即可)。
+    r_to_sun = np.hypot(X - sx, Y - sy)
+    sun_visible = (r_to_sun <= ANG_SUN) & (r > ANG_EARTH * (1.0 + RING_FRAC))
+    if draw_sun and np.any(sun_visible):
+        # 太阳盘内越靠中心越亮(暖白强光)
+        edge = np.clip((ANG_SUN - r_to_sun) / ANG_SUN, 0, 1)
+        sun_rgb = np.stack([np.full_like(X, 1.0), np.full_like(X, 0.93),
+                            np.full_like(X, 0.80)], axis=-1)
+        sun_lin = sun_rgb * (2.0 + 6.0 * edge[..., None])
+        rgb[sun_visible] = sun_lin[sun_visible]
 
     if return_linear:
         return _box(np.clip(rgb, 0, None), ssaa)        # 线性HDR(供16bit/后期)
