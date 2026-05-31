@@ -122,6 +122,12 @@ def shadow_radius_arcmin(h_km):
     return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
 
 
+def axis_arcmin(h_km):
+    """贴轴-limb 落点距本影中心的角距 (arcmin)。红核源（与 shadow_radius_arcmin 对称）。"""
+    r = np.abs(shadow_radius_signed_km(h_km))
+    return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
+
+
 def focusing_factor(h_km, r_floor_km=150.0):
     """几何聚焦因子（相对亮度增益），∝ b·|dh/dr| / r。
 

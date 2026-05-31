@@ -1,0 +1,43 @@
+# Working Log
+
+项目工作记录。格式遵循 project_scaffold skill：Changelog（按日期）+ Lessons Learned（避坑）。
+深度物理方法见 `PHYSICS_AND_PITFALLS.md`。
+
+## Changelog
+
+### 2026-05-31
+
+- Scaffold 项目：git repo、uv venv (Python 3.12)、PRD/RFC/README、中文工作语言约定。
+- Science review：多 agent 文献调研 + 数据侦察，确定物理模型与权威数据源。
+- 下载权威数据：臭氧 Serdyuchenko 2014 截面、AFGL US Standard 大气廓线、CIE 1931 CMF。
+- 实现 L0 辐射传输管线六模块（大气/截面/几何/太阳谱/RT/颜色），各自自查通过。
+- L0 v1 色相曲线闭环全过：红区2-14km → 绿松石带16-36km → 白边，亮度暴跌240×。
+- 修正颜色 per-height 归一化错误：k 改从未衰减日光算一次全程复用。
+- 实现 L1 折射几何：α(h) + 本影内角距映射，对照 Robinson 2022 Table 3.1 吻合<2%。
+- 主图横轴从擦边高度改为月面角度（双轴 arcmin + r/R_umbra）。
+- 实现聚焦因子，按环带能量守恒 B∝b·|dh/dr|/r（修正初版方向反的错误）。
+- 修正几何 bug：绿松石带改用对侧-limb 公式，从本影外 50-57' 归位到 34-41' 紧贴边界。
+- 偏蓝诊断：确认 sRGB 红蓝比 0.88 落在文献 0.8-1.0 区间，是 CIELAB hue 度量误导，未改物理。
+- 月盘 2D 渲染 render.py：复用辐射传输 LUT，月盘偏心贴图，全盘统一曝光，验收通过。
+- 补写 PHYSICS_AND_PITFALLS.md（物理方法 + 5个坑全记录）、working.md。
+- 真实几何月盘渲染：d=26'(食分0.99)让绿松石带横切月盘，红核/绿松石/白同盘可见。
+- 叠加真实月面反照率纹理（Clementine 灰度图）× 物理食光颜色，正交投影，做出写实月食照片。
+- **架构升级：逐像素反向 ray tracing（render_rt.py），替换 LUT 查表，根治 banding。**
+  根因不是采样密度，是把非单调 角距(h) 映射 argsort 压平+角距轴插值的拓扑错误。
+  解法：密 h 网格(8000点)算两 limb 的 h→(角距,XYZ,聚焦)，按角距极小值切单调分支，
+  每像素在单调 a→h 反查、光滑 h→颜色取色、两 limb 辐照叠加。相邻色跳 0.0044(无台阶)，
+  numpy 1.6s 不需 MPS。还修了旧 LUT 只用对侧 limb、红核暖靠透射谱凑的缺陷。
+- render_textured 着色接入反向 RT：最终写实月食照片无 banding，颜色逐像素物理算出。
+
+## Lessons Learned
+
+- **颜色归一化常数 k 必须从未衰减入射日光算一次、全程复用**。per-height 归一会抹平本影变暗的亮度阶梯，制造假象。这是物理正确性要求，不是美化。
+- **红核与绿松石带来自太阳圆盘两个不同 limb，是镜像关系，不能用一套映射贯穿**。贴轴公式 `r=(R⊕+h)−α·d_moon` 管红核；对侧公式 `r=R_umbra−(α·d_moon−h)` 管绿松石带。混用会把绿松石带错算到本影外。
+- **色相偏差先怀疑度量，再怀疑物理**。CIELAB hue 角会把视觉温和的偏蓝放大；黑体白点偏暖会进一步推蓝。判色相用 sRGB 红蓝比更诚实。绝不为凑漂亮色相去改物理。
+- **聚焦因子方向**：低擦边高度光线会聚到近本影中心，使中心更亮（红核虽消光重却最亮）。公式漏 `/r` 项会反向。
+- **臭氧截面用实测（Serdyuchenko 2014），不用窄高斯近似**。近似带形太窄、红端吸收不足，绿松石带会偏蓝紫。
+- 数据文件 `data/raw/o3_serdyuchenko_2014.dat` 是 12MB，已入 git，是项目核心数据不要删。
+- 验证哲学：每替换一个近似为真实数据，对比曲线确认没回归；每步都要有能直接看的标量/曲线。
+- **渲染 banding 的根因是拓扑/坐标错误，不是分辨率**：非单调映射 argsort 压平 + 角距轴插值。加密 LUT 治标不治本。正解是分支感知反查（render_rt.py）：在单调分支内反查 a→h，在光滑 h→颜色取色。逐像素 brentq 求根是错误优化（慢且无精度收益，颜色对 h 光滑）。
+- 月面纹理与物理食光颜色必须在**线性空间相乘**（reflectance × emission），再 tone-map+gamma。
+- 旧 render.py 的 build_lut/lookup_xyz 已被 render_rt 取代；render_textured 现走 RT 着色。

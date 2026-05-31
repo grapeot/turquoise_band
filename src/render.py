@@ -46,7 +46,7 @@ R_UMBRA_ARCMIN = geometry.umbra_radius_arcmin()                   # 本影角半
 # 1. 角距 → 线性 XYZ / Y 的 LUT（口径 B，边缘密采）
 # ============================================================
 def build_lut(n_h=600, h_min=2.0, h_max=70.0, lam_min=380, lam_max=780, n_lam=401,
-              dense_lo=15.0, dense_hi=30.0, dense_extra=400):
+              dense_lo=15.0, dense_hi=30.0, dense_extra=400, extra_dense_segs=None):
     """构建 1D LUT：渲染角距 a_lut(arcmin) → 线性 XYZ_lum、线性 Y。
 
     复用 rt.emergent_spectrum（辐射传输）与 col.spectrum_to_XYZ（颜色），与 pipeline.scan 同口径：
@@ -67,7 +67,11 @@ def build_lut(n_h=600, h_min=2.0, h_max=70.0, lam_min=380, lam_max=780, n_lam=40
     # 以 h 为内部采样变量，绿松石带所在 h 段加密
     h_uniform = np.linspace(h_min, h_max, n_h)
     h_dense = np.linspace(dense_lo, dense_hi, dense_extra)
-    h = np.unique(np.concatenate([h_uniform, h_dense]))
+    segs = [h_uniform, h_dense]
+    # 额外加密段（如红核所在的低擦边高度段），消除强曝光下小角距区的色阶台阶
+    for lo, hi, n in (extra_dense_segs or []):
+        segs.append(np.linspace(lo, hi, n))
+    h = np.unique(np.concatenate(segs))
 
     lam = np.linspace(lam_min, lam_max, n_lam)
 
@@ -86,9 +90,10 @@ def build_lut(n_h=600, h_min=2.0, h_max=70.0, lam_min=380, lam_max=780, n_lam=40
     foc = foc / foc.max()
     XYZ_lum = XYZ * foc[:, None]
 
-    # 角距（模型坐标）→ 口径 B 压缩到真实本影
+    # 角距：几何已修正（对侧-limb 公式），绿松石带自然落 34-41' 本影内，
+    # 不再需要口径 B 压缩——直接用真实角距。
     arcmin_model = geometry.shadow_radius_arcmin(h)
-    a_lut_raw = arcmin_model / arcmin_model.max() * R_UMBRA_ARCMIN
+    a_lut_raw = arcmin_model
 
     # 按角距升序排
     order = np.argsort(a_lut_raw)
@@ -131,7 +136,7 @@ def lookup_xyz(a, a_lut, XYZ_lum, Y_lum):
 # ============================================================
 # 2. 月盘几何 + 渲染
 # ============================================================
-def render_disk(d_arcmin=22.0, size=1024, margin_arcmin=4.0, ssaa=2,
+def render_disk(d_arcmin=26.0, size=1024, margin_arcmin=4.0, ssaa=2,
                 exposure=None, target_srgb=0.80, lut_kwargs=None):
     """渲染一张月盘 PNG（线性 XYZ → 全局曝光 → Reinhard → sRGB → 8bit）。
 
@@ -173,16 +178,15 @@ def render_disk(d_arcmin=22.0, size=1024, margin_arcmin=4.0, ssaa=2,
 
     # ---- 全局统一曝光标定 ----
     if exposure is None:
-        # 关键：曝光按「月盘实际能采到」的最亮处标定，不是整个 LUT 的最外缘。
-        # 月盘只覆盖角距 [d-R_moon, d+R_moon]，其最远边缘 a_far=d+R_moon 落在绿松石带，
-        # 是月盘上最亮的区域。让这里映到 sRGB≈target_srgb，绿松石环/外缘弧才可见，
-        # 同时保住红核（最暗，Y 小约 20×）相对偏暗的正确观感。
-        a_far = d_arcmin + R_MOON_ARCMIN
-        Y_bright = float(lookup_xyz(np.array([a_far]), a_lut, XYZ_lum, Y_lum)[0, 1])
-        disp_target_lin = _srgb_inv_gamma(target_srgb)    # 目标线性显示值
-        # Reinhard：E*Y/(1+E*Y) = t  =>  E = t / (Y*(1-t))
-        t = np.clip(disp_target_lin, 1e-4, 0.999)
-        exposure = t / (Y_bright * (1.0 - t))
+        # 摄影做法「为暗部曝光」：本影内动态范围极大（红核比绿松石暗~240×），
+        # 单一曝光若按最亮端标定，红核会死黑。改按月盘上**较暗的红核侧**标定，
+        # 让红核进入可见中调，绿松石/白靠 Reinhard 压高光自然收住，不过曝。
+        # 全局统一曝光，绝不 per-pixel——保住「中心暗、边缘亮」的相对结构。
+        a_near = max(d_arcmin - R_MOON_ARCMIN, a_lut[0])     # 月盘最靠本影中心一侧(红核)
+        Y_dark = float(lookup_xyz(np.array([a_near]), a_lut, XYZ_lum, Y_lum)[0, 1])
+        # 让红核侧映到中等偏暗 sRGB（保留它是暗部的观感，但能看见）
+        t = np.clip(_srgb_inv_gamma(0.32), 1e-4, 0.999)
+        exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
 
     # 在亮度上做 Reinhard（不动色相）：取 xyY，压 Y，再回 XYZ
     XYZ_disp = _tone_map_on_Y(XYZ_pix, exposure)
@@ -321,8 +325,8 @@ def save_disk_png(rgb8, info, path):
     ax.imshow(rgb8, extent=[ext[0], ext[1], ext[2], ext[3]], origin="lower")
     ax.set_xlabel("角距 x (arcmin)，原点=本影中心")
     ax.set_ylabel("角距 y (arcmin)")
-    ax.set_title(f"月全食月盘 (L1物理, 口径B, d={info['d']:.0f}', 食分≈{(info['R_umbra']+info['R_moon']-info['d'])/(2*info['R_moon']):.2f})\n"
-                 "基于 L1 物理，色相微调中（绿松石偏蓝待 air-mass 臭氧修正）", fontsize=10)
+    ax.set_title(f"月全食月盘（真实几何，d={info['d']:.0f}', 食分≈{(info['R_umbra']+info['R_moon']-info['d'])/(2*info['R_moon']):.2f}）\n"
+                 "月盘真大小真位置骑跨绿松石带：近本影中心侧红、中部绿松石、远侧白", fontsize=10)
     # 标本影边界圆弧
     th = np.linspace(0, 2 * np.pi, 400)
     ax.plot(info["R_umbra"] * np.cos(th), info["R_umbra"] * np.sin(th),
@@ -350,7 +354,7 @@ def save_disk_with_legend(rgb8, info, path):
     ax.imshow(rgb8, extent=[ext[0], ext[1], ext[2], ext[3]], origin="lower")
     ax.set_xlabel("角距 x (arcmin)，原点=本影中心")
     ax.set_ylabel("角距 y (arcmin)")
-    ax.set_title(f"月全食月盘 2D 渲染（L1 物理，口径 B 重归一到本影 {info['R_umbra']:.0f}'）",
+    ax.set_title(f"月全食月盘 2D 渲染（真实几何，月盘骑跨绿松石带，本影 {info['R_umbra']:.0f}'）",
                  fontsize=11)
     th = np.linspace(0, 2 * np.pi, 400)
     ax.plot(info["R_umbra"] * np.cos(th), info["R_umbra"] * np.sin(th),
@@ -380,13 +384,130 @@ def save_disk_with_legend(rgb8, info, path):
     print(f"已存对照图：{path}")
 
 
+# ============================================================
+# 4. 满画面全月盘渲染（红→绿松石→白完整展开）+ HDR
+# ============================================================
+def render_full_disk(size=1200, ssaa=2, a_inner=4.0, a_outer=None,
+                     gradient_axis="x", target_srgb=0.92, lut_kwargs=None):
+    """满画面月盘：月盘充满画幅，盘面颜色沿一个方向从 红核→绿松石→白 完整展开。
+
+    与 render_disk 的区别：那个按真实月食几何（月盘小、偏心、只切本影边缘一道弧），
+    红绿白展不开。这里取**展示/艺术取向**——把月盘视半径映射成完整角距区间
+    [a_inner, a_outer]，让月盘一侧贴本影深处(红)、另一侧到本影边缘(白)，中间是绿松石。
+    物理着色仍来自同一 LUT（角距→颜色），只是把"角距"沿盘面线性铺开，标题会注明。
+
+    a_inner/a_outer: 月盘两端映射到的角距(arcmin)。a_outer 缺省 = 本影边界 R_umbra。
+    gradient_axis: 'x' 渐变沿水平方向（左红右白），'radial' 同心（中心红外圈白）。
+    返回 (rgb8_linear_HDR, rgb8_display, info) —— HDR 是线性高动态，display 是 tone-map 后 8bit。
+    """
+    lut_kwargs = lut_kwargs or {}
+    if a_outer is None:
+        a_outer = R_UMBRA_ARCMIN
+    a_lut, XYZ_lum, Y_lum, meta = build_lut(**lut_kwargs)
+
+    S = size * ssaa
+    # 归一化盘面坐标 [-1,1]
+    u = np.linspace(-1, 1, S)
+    U, V = np.meshgrid(u, u)
+    rr = np.hypot(U, V)
+    inside = rr <= 1.0
+
+    # 盘面位置 → 角距：沿选定方向把 [a_inner, a_outer] 铺开
+    if gradient_axis == "x":
+        # 左(U=-1)=a_inner(红核), 右(U=+1)=a_outer(白)
+        frac = (U + 1.0) / 2.0
+    else:  # radial：中心=a_inner，边缘=a_outer
+        frac = np.clip(rr, 0, 1)
+    a = a_inner + (a_outer - a_inner) * frac
+
+    XYZ_pix = lookup_xyz(a, a_lut, XYZ_lum, Y_lum)        # 线性 XYZ (S,S,3)
+
+    # 全局曝光：让最亮端(a_outer, 趋白)映到 target_srgb
+    Y_bright = float(lookup_xyz(np.array([a_outer]), a_lut, XYZ_lum, Y_lum)[0, 1])
+    t = np.clip(_srgb_inv_gamma(target_srgb), 1e-4, 0.999)
+    E = t / (Y_bright * (1.0 - t))
+
+    # HDR：线性 sRGB（曝光后，未 tone-map、未 gamma），保留高动态范围
+    XYZ_exposed = XYZ_pix * E
+    rgb_lin_hdr = np.clip(_xyz_to_srgb_linear(XYZ_exposed), 0, None)
+    rgb_lin_hdr = rgb_lin_hdr * inside[..., None]
+
+    # 显示：Reinhard tone-map on Y + gamma
+    XYZ_disp = _tone_map_on_Y(XYZ_pix, E)
+    rgb_disp = _srgb_gamma(np.clip(_xyz_to_srgb_linear(XYZ_disp), 0, 1))
+    rgb_disp = rgb_disp * inside[..., None]
+
+    hdr = _box_downsample(rgb_lin_hdr, ssaa)
+    disp8 = (np.clip(_box_downsample(rgb_disp, ssaa), 0, 1) * 255 + 0.5).astype(np.uint8)
+
+    info = dict(a_lut=a_lut, XYZ_lum=XYZ_lum, Y_lum=Y_lum, meta=meta, exposure=float(E),
+                a_inner=a_inner, a_outer=a_outer, gradient_axis=gradient_axis)
+    return hdr, disp8, info
+
+
+def save_hdr(hdr_linear, path):
+    """存线性 HDR。优先 .exr(OpenEXR)，无则存 .hdr(Radiance)，再不行存 16bit PNG 兜底。"""
+    base = os.path.splitext(path)[0]
+    try:
+        import imageio.v2 as imageio
+        imageio.imwrite(base + ".exr", hdr_linear.astype(np.float32))
+        print(f"已存 HDR：{base}.exr")
+        return base + ".exr"
+    except Exception as e1:
+        try:
+            import imageio.v2 as imageio
+            imageio.imwrite(base + ".hdr", hdr_linear.astype(np.float32))
+            print(f"已存 HDR：{base}.hdr")
+            return base + ".hdr"
+        except Exception as e2:
+            # 16bit PNG 兜底（归一到最大值，非真 HDR 但保留更多动态）
+            m = max(hdr_linear.max(), 1e-6)
+            png16 = (np.clip(hdr_linear / m, 0, 1) * 65535 + 0.5).astype(np.uint16)
+            try:
+                import imageio.v2 as imageio
+                imageio.imwrite(base + "_16bit.png", png16)
+                print(f"已存 16bit PNG(HDR兜底)：{base}_16bit.png（EXR/HDR 不可用: {e1}）")
+                return base + "_16bit.png"
+            except Exception as e3:
+                print(f"HDR 存储失败: {e1} / {e2} / {e3}")
+                return None
+
+
+def save_full_disk_png(disp8, info, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "Heiti SC", "STHeiti"]
+    plt.rcParams["axes.unicode_minus"] = False
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(disp8, origin="lower")
+    ax.axis("off")
+    ax.set_title("月全食满画面月盘（展示取向：盘面铺开 红核→绿松石→白）\n"
+                 f"着色为 L1 物理(角距→透射谱→sRGB)，角距区间 [{info['a_inner']:.0f}', {info['a_outer']:.0f}']",
+                 fontsize=11)
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f"已存满画面月盘：{path}")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--d", type=float, default=22.0, help="月心到本影中心角距 arcmin")
     ap.add_argument("--size", type=int, default=1024)
     ap.add_argument("--ssaa", type=int, default=2)
     ap.add_argument("--exposure", type=float, default=None)
+    ap.add_argument("--full", action="store_true", help="满画面全月盘模式(红→绿松石→白完整展开)+HDR")
+    ap.add_argument("--axis", default="x", choices=["x", "radial"], help="满画面渐变方向")
     args = ap.parse_args()
+
+    if args.full:
+        import time
+        t0 = time.time()
+        hdr, disp8, info = render_full_disk(size=args.size, ssaa=args.ssaa,
+                                            gradient_axis=args.axis)
+        print(f"满画面渲染 {args.size}x{args.size} (SSAA×{args.ssaa}) 用时 {time.time()-t0:.2f}s, 曝光 E={info['exposure']:.3g}")
+        save_full_disk_png(disp8, info, os.path.join(OUT, f"moon_full_{args.axis}.png"))
+        save_hdr(hdr, os.path.join(OUT, f"moon_full_{args.axis}_hdr"))
+        sys.exit(0)
 
     import time
     t0 = time.time()
