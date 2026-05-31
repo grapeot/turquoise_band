@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Data: keep small raw reference files in git, ignore large derived/processed binaries
+data/processed/*.npy
+data/processed/*.npz
+outputs/*.png
+outputs/*.mp4
+!outputs/.gitkeep
+
+# OS
+.DS_Store
