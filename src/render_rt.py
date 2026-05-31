@@ -52,11 +52,11 @@ def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
     a_mono, h_mono = a[sl], h[sl]
     foc = g.focusing_factor(h)
     foc = foc / foc.max()
-    # 半影/本影外的"正常月光"。物理上半影是太阳被地球部分遮挡，比满月暗（部分光照）。
-    # 取一个中调亮度(penumbra_Y)而非满月 Y=1，使它过 tone-map 后落在中调、月海细节可见、
-    # 不被高光肩部压成死白。色相=中性日光白。
-    penumbra_Y = 0.20
-    white = white_XYZ * k * (penumbra_Y / (white_XYZ[1] * k))
+    # 半影/本影外 = 正常月光(直射日光,亮)。必须≈LUT边缘亮度(趋白区~1)以连续——
+    # 否则月盘移出本影、右缘超出LUT范围后会从亮(0.99)突降到暗(造成"月面向右变暗"bug)。
+    # 整体暗调由全局 tone-map(DYN_GAMMA)统一处理, 不靠把本影外调暗。
+    edge_Y = float(XYZ[-1, 1])              # LUT 最高擦边高度(趋白)的亮度 ≈ 正常月光
+    white = white_XYZ * k * (edge_Y / max(white_XYZ[1] * k, 1e-9))
     return dict(a_mono=a_mono, h_mono=h_mono,
                 a_lo=float(a_mono[0]), a_hi=float(a_mono[-1]),
                 h_grid=h, XYZ_grid=XYZ, foc_grid=foc, white=white)

@@ -146,7 +146,9 @@ def render_earth_panel(D, hdr=False):
 
 
 # 正常月光的参考亮度(nits)。地球环/太阳是高光(>这个值, 在HDR里超亮)。
-HDR_WHITE_NITS = 200.0
+HDR_WHITE_NITS = 300.0
+# HDR 用 less aggressive 压缩(比SDR的DYN_GAMMA=0.35柔和), 暗面提亮但保更多高动态。
+HDR_GAMMA = 0.55
 
 
 def _pq_encode(linear_nits):
@@ -166,13 +168,33 @@ def _render_hdr_frame(args):
     # (1) 线性 TIFF: 固定 scale 保留相对HDR(正常月光1.0→16000, 留headroom)。
     f16_lin = np.clip(frame * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
-    # (2) PQ 编码给视频: 线性场景值→nits(正常月光=HDR_WHITE_NITS)→PQ→16bit RGB TIFF。
-    # (PIL 不支持16bit RGB PNG, 用 tifffile 存16bit RGB; ffmpeg 能读 rgb48 tiff)
-    nits = frame * HDR_WHITE_NITS
+    # (2) PQ 编码给视频: 线性场景值→nits→PQ。HDR 用 less aggressive 压缩(暗面提亮但保高动态):
+    # 对亮度做温和 gamma(HDR_GAMMA, 比SDR的0.35柔和), 血月暗面不至于死黑, 高光仍超亮。
+    Yp = np.maximum(frame.max(axis=-1, keepdims=True), 1e-9)
+    frame_c = frame / Yp * np.power(Yp, HDR_GAMMA)   # 压亮度保色相
+    nits = frame_c * HDR_WHITE_NITS
     pq = _pq_encode(nits)
     pq16 = (np.clip(pq, 0, 1) * 65535 + 0.5).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"pq{i:04d}.tif"), pq16)
     return i
+
+
+def _draw_angle(rgb8, D):
+    """左上角标月心距本影中心角分数值。rgb8: uint8 (H,W,3)。"""
+    from PIL import ImageDraw, ImageFont
+    im = Image.fromarray(rgb8)
+    d = ImageDraw.Draw(im)
+    font = None
+    for fp in ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+               "/System/Library/Fonts/STHeiti Medium.ttc"]:
+        try:
+            font = ImageFont.truetype(fp, 22); break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    d.text((14, 10), f"月心距本影中心 D = {D:.1f}'", fill=(255, 255, 255), font=font)
+    return np.asarray(im)
 
 
 def _box(img, f):
@@ -195,6 +217,7 @@ def _render_one(args):
     i, D = args
     frame = _assemble(D, hdr=False)
     f8 = (np.clip(frame, 0, 1) * 255 + 0.5).astype(np.uint8)
+    f8 = _draw_angle(f8, D)
     Image.fromarray(f8).save(os.path.join(FRAMEDIR, f"f{i:04d}.png"))
     return i
 
@@ -220,7 +243,7 @@ def main(workers=None, do_png=True, do_tiff=True):
         _run_parallel(_render_one, tasks, workers, "PNG(SDR)")
         out = os.path.join(OUT, "moon_eclipse_sdr_h265.mp4")
         # SDR H.265
-        subprocess.run(["ffmpeg", "-y", "-framerate", "30", "-i", os.path.join(FRAMEDIR, "f%04d.png"),
+        subprocess.run(["ffmpeg", "-y", "-framerate", "60", "-i", os.path.join(FRAMEDIR, "f%04d.png"),
                         "-c:v", "libx265", "-pix_fmt", "yuv420p", "-crf", "20",
                         "-tag:v", "hvc1", out], check=True)
         print(f"SDR H.265: {out}")
@@ -232,7 +255,7 @@ def main(workers=None, do_png=True, do_tiff=True):
         # HDR H.265: PQ 编码已在 Python 完成(pq*.tif 是 PQ 码值), ffmpeg 只转10bit+打HDR10标记。
         # 不依赖 zscale。BT.2020 primaries + SMPTE2084(PQ) transfer。
         subprocess.run([
-            "ffmpeg", "-y", "-framerate", "30", "-i", os.path.join(HDRDIR, "pq%04d.tif"),
+            "ffmpeg", "-y", "-framerate", "60", "-i", os.path.join(HDRDIR, "pq%04d.tif"),
             "-vf", "format=gbrp16le,format=yuv420p10le",
             "-c:v", "libx265", "-crf", "18", "-tag:v", "hvc1",
             "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
