@@ -47,18 +47,30 @@ def XYZ_to_sRGB(XYZ, normalize=None):
     return np.clip(rgb, 0.0, 1.0)
 
 
-def hue_angle(XYZ):
+def hue_angle(XYZ, white_XYZ=None):
     """从 XYZ 提取 CIE Lab 的色相角（度，0=红, 90=黄, 180=青绿, 270=蓝）。
 
     用 Lab 的 hue angle 比 RGB 更感知均匀。对绝对亮度缩放不敏感。
+    white_XYZ：Lab 的参考白点（应为未衰减入射日光的 XYZ，与亮度归一用同一参考，
+    见 science review）。缺省退化到对 XYZ 自身归一（仅用于模块自测）。
     """
     XYZ = np.asarray(XYZ, dtype=float)
     if XYZ[1] <= 0:
         return np.nan
-    # 用 D65 白点归一到 Lab
-    Lab = colour.XYZ_to_Lab(XYZ / np.sum(XYZ) * 1.0)  # 形状归一，仅取色相
+    if white_XYZ is None:
+        white_XYZ = XYZ / np.sum(XYZ)  # 自测兜底
+    Lab = colour.XYZ_to_Lab(XYZ, illuminant=_xy_from_XYZ(white_XYZ))
     a, b = Lab[1], Lab[2]
     return np.degrees(np.arctan2(b, a)) % 360.0
+
+
+def _xy_from_XYZ(XYZ):
+    """XYZ → CIE xy 色度坐标（Lab 参考白点需要 xy）。"""
+    XYZ = np.asarray(XYZ, dtype=float)
+    s = np.sum(XYZ)
+    if s <= 0:
+        return np.array([0.3127, 0.3290])  # D65 兜底
+    return np.array([XYZ[0] / s, XYZ[1] / s])
 
 
 def luminance(XYZ):

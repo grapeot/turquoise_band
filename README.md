@@ -7,11 +7,14 @@
 ## 状态
 
 - [x] Scaffold（repo / venv / PRD / RFC）
-- [ ] Science review
-- [ ] 下载权威数据（O₃ 截面、大气廓线、太阳谱、CIE CMF）
-- [ ] L0：色相曲线闭环（红→青→白趋势自查）
-- [ ] L1：定量校核
-- [ ] L2：合成月食照片渲染
+- [x] Science review（多 agent 调研，见 `docs/SCIENCE_REVIEW.md`）
+- [x] 下载权威数据（O₃ Serdyuchenko 2014 截面、AFGL 大气廓线、CIE CMF）
+- [x] **L0：色相曲线闭环 ✓** —— 红→青→白趋势 + 亮度暴跌 240× 全部自查通过（`outputs/L0_colorband.png`）
+- [ ] L1：定量校核（真实折射几何 + air-mass 增强臭氧柱，把青绿色相从偏蓝拉正）
+- [ ] L2：合成月食照片渲染（月盘几何 + MPS）
+
+L0 结果：合成色带肉眼可见 **深暗红（本影深处，2-14km）→ 青绿 teal 带（16-36km）→ 白边（36km+）**。
+跑：`source .venv/bin/activate && python src/pipeline.py --self-check`
 
 ## 文档
 

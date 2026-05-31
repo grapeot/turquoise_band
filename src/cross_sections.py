@@ -73,11 +73,25 @@ def sigma_o3_chappuis_approx(lam_nm):
     return g1 + g2
 
 
+def use_real_o3(temp_K=233):
+    """加载 Serdyuchenko 2014 实测臭氧截面（平流层温度）。"""
+    global _o3_interp
+    import data_loaders
+    _o3_interp = data_loaders.load_o3_cross_section(temp_K)
+
+
 def sigma_o3(lam_nm):
-    """臭氧吸收截面 (cm^2/分子)。优先用加载的实测数据，否则用 Chappuis 近似。"""
+    """臭氧吸收截面 (cm^2/分子)。优先用实测数据，否则用 Chappuis 近似。"""
     if _o3_interp is not None:
         return _o3_interp(np.asarray(lam_nm, dtype=float))
     return sigma_o3_chappuis_approx(lam_nm)
+
+
+# 模块导入时自动尝试加载真实截面
+try:
+    use_real_o3()
+except Exception as _e:
+    print(f"[cross_sections] 真实臭氧截面加载失败，回退近似: {_e}")
 
 
 if __name__ == "__main__":

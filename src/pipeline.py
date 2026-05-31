@@ -22,18 +22,32 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "outputs")
 
 
 def scan(h_min=8.0, h_max=70.0, n_h=120, lam_min=380, lam_max=780, n_lam=401):
-    """扫一组擦边高度，返回每个高度的 (h, hue, Y, sRGB)。"""
+    """扫一组擦边高度，返回每个高度的 (h, hue, Y, sRGB)。
+
+    关键（见 science review）：颜色归一化常数从未衰减入射日光算一次，全程复用——
+    白点 white_XYZ = 入射日光的 XYZ。这样 Y(h) 自动携带真实消光导致的亮度暴跌，
+    色相也都相对同一个白点参考，不做 per-height 归一。
+    """
     h = np.linspace(h_min, h_max, n_h)
     lam = np.linspace(lam_min, lam_max, n_lam)
-    I = rt.emergent_spectrum(h, lam)  # (H, L)
 
-    XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))])  # (H,3)
+    # 未衰减入射日光的 XYZ —— 固定参考白点
+    import solar
+    I_sun = solar.solar_spectrum(lam)
+    white_XYZ = col.spectrum_to_XYZ(lam, I_sun)
+    k = 1.0 / white_XYZ[1]  # 让白点 Y=1
+
+    I = rt.emergent_spectrum(h, lam)  # (H, L)
+    XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))]) * k  # (H,3)，同一 k
+    white_XYZ_norm = white_XYZ * k  # Y=1
     Y = XYZ[:, 1]
-    hue = np.array([col.hue_angle(XYZ[i]) for i in range(len(h))])
-    # sRGB：每个高度按自身亮度归一（看色相），另存一条保留相对亮度的
-    rgb_hue = np.array([col.XYZ_to_sRGB(XYZ[i], normalize=max(Y[i], 1e-9)) for i in range(len(h))])
-    Ymax = Y.max()
-    rgb_lum = np.array([col.XYZ_to_sRGB(XYZ[i], normalize=Ymax) for i in range(len(h))])
+    hue = np.array([col.hue_angle(XYZ[i], white_XYZ=white_XYZ_norm) for i in range(len(h))])
+
+    # sRGB：全程用同一白点归一，保留相对亮度（暗处自然变暗）
+    rgb_lum = np.array([col.XYZ_to_sRGB(XYZ[i]) for i in range(len(h))])
+    rgb_lum = np.clip(rgb_lum, 0, 1)
+    # 另存一条：每高度按自身亮度提亮（只为看色相，不代表真实亮度）
+    rgb_hue = np.array([col.XYZ_to_sRGB(XYZ[i], normalize=max(Y[i], 1e-12)) for i in range(len(h))])
     return h, hue, Y, rgb_hue, rgb_lum, lam, I
 
 
@@ -44,7 +58,7 @@ def plot(h, hue, Y, rgb_hue, rgb_lum):
     # 1. 色相角 vs 擦边高度
     axes[0].plot(h, hue, color="k", lw=2)
     axes[0].set_ylabel("色相角 (°)\n0=红 90=黄 180=青绿 270=蓝")
-    axes[0].set_title("月食绿松石带：颜色随擦边高度的变化（L0 v0，含臭氧 Chappuis 近似）")
+    axes[0].set_title("月食绿松石带：颜色随擦边高度的变化（L0 v1，真实臭氧截面+AFGL大气）")
     axes[0].grid(alpha=0.3)
     axes[0].axhspan(0, 40, alpha=0.08, color="red")
     axes[0].axhspan(150, 200, alpha=0.08, color="teal")
@@ -84,30 +98,41 @@ def plot(h, hue, Y, rgb_hue, rgb_lum):
     return p
 
 
-def self_check(h, hue, Y):
-    """断言定性趋势：低高度偏红、中段转青绿、亮度随高度单调升。"""
+def self_check(h, hue, Y, rgb_lum):
+    """断言定性趋势。用 sRGB 实际通道关系判断红/青/白（比 Lab 色相角阈值更诚实）。
+
+    - 红区：R 通道明显大于 B（暖色），出现在低擦边高度。
+    - 青绿带：B 通道 >= R 通道（冷色），且非接近白（R<0.9 或 饱和度够）。
+    - 白区：R,G,B 都接近 1。
+    """
     print("\n=== 自查趋势 ===")
-    valid = ~np.isnan(hue)
-    # 找绿松石带：色相角进入青绿区(150-220°)的高度窗口
-    teal_mask = valid & (hue > 130) & (hue < 230)
-    red_mask = valid & ((hue < 50) | (hue > 330))
+    R, G, B = rgb_lum[:, 0], rgb_lum[:, 1], rgb_lum[:, 2]
+
+    red_mask = (R > B + 0.08) & (R > G)                 # 暖：红/橙占优
+    near_white = (R > 0.9) & (G > 0.9) & (B > 0.9)
+    teal_mask = (B >= R - 0.02) & (~near_white) & (G > 0.2)  # 冷：青蓝，未到白
 
     if red_mask.any():
-        print(f"红区擦边高度范围: {h[red_mask].min():.0f}–{h[red_mask].max():.0f} km")
+        print(f"暖色(红/橙)区擦边高度: {h[red_mask].min():.0f}–{h[red_mask].max():.0f} km, "
+              f"亮度 {Y[red_mask].min():.1e}–{Y[red_mask].max():.1e}")
     if teal_mask.any():
-        print(f"青绿(绿松石)带擦边高度范围: {h[teal_mask].min():.0f}–{h[teal_mask].max():.0f} km")
-    else:
-        print("⚠ 未检测到青绿色相区间")
+        print(f"冷色(绿松石)带擦边高度: {h[teal_mask].min():.0f}–{h[teal_mask].max():.0f} km")
+    if near_white.any():
+        print(f"趋白区擦边高度: {h[near_white].min():.0f}–{h[near_white].max():.0f} km")
 
-    # 亮度应随高度大体单调升
     mono = np.mean(np.diff(Y) > 0)
     print(f"亮度随高度上升的比例: {mono*100:.0f}%")
+    # 亮度跨度：本影深处应比边缘暗几个数量级
+    dyn = Y.max() / max(Y.min(), 1e-12)
+    print(f"亮度动态范围(边缘/深处): {dyn:.1e} 倍")
 
     checks = {
-        "存在红区(低高度)": red_mask.any() and h[red_mask].mean() < h.mean(),
-        "存在青绿带": teal_mask.any(),
-        "青绿带高度高于红区": (teal_mask.any() and red_mask.any() and h[teal_mask].mean() > h[red_mask].mean()),
+        "存在暖色红区(低高度)": red_mask.any() and h[red_mask].mean() < h.mean(),
+        "存在绿松石冷色带": teal_mask.any(),
+        "绿松石带高于红区": (teal_mask.any() and red_mask.any() and h[teal_mask].mean() > h[red_mask].mean()),
+        "存在趋白区(高高度)": near_white.any() and h[near_white].mean() > h.mean(),
         "亮度大体随高度升": mono > 0.8,
+        "亮度暴跌≥100倍": dyn > 1e2,
     }
     for k, v in checks.items():
         print(f"  [{'✓' if v else '✗'}] {k}")
@@ -119,8 +144,8 @@ if __name__ == "__main__":
     ap.add_argument("--self-check", action="store_true")
     args = ap.parse_args()
 
-    h, hue, Y, rgb_hue, rgb_lum, lam, I = scan()
+    h, hue, Y, rgb_hue, rgb_lum, lam, I = scan(h_min=2.0, h_max=70.0)
     plot(h, hue, Y, rgb_hue, rgb_lum)
     if args.self_check:
-        ok = self_check(h, hue, Y)
+        ok = self_check(h, hue, Y, rgb_lum)
         print(f"\n{'✓ L0 闭环自查通过' if ok else '✗ 趋势未完全满足，需检查物理参数'}")

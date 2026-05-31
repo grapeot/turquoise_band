@@ -35,22 +35,23 @@ def n_o3_gaussian(z_km, peak_km=22.0, width_km=5.0, column_DU=300.0):
     return n_peak * shape
 
 
-# ---- 真实廓线：待数据接入 ----
+# ---- 真实廓线：AFGL US Standard，默认自动加载 ----
 _air_interp = None
 _o3_interp = None
 
 
-def load_profiles(air_path=None, o3_path=None):
-    """从 data/raw 加载真实廓线。文件两列：海拔(km), 数密度(cm^-3)。"""
+def use_real_profiles():
+    """加载 AFGL US Standard 真实廓线（空气 + 臭氧数密度）。"""
     global _air_interp, _o3_interp
-    from scipy.interpolate import interp1d
+    import data_loaders
+    _air_interp, _o3_interp = data_loaders.load_atmosphere()
 
-    if air_path:
-        d = np.loadtxt(air_path)
-        _air_interp = interp1d(d[:, 0], d[:, 1], bounds_error=False, fill_value=(d[0, 1], 0.0))
-    if o3_path:
-        d = np.loadtxt(o3_path)
-        _o3_interp = interp1d(d[:, 0], d[:, 1], bounds_error=False, fill_value=0.0)
+
+# 模块导入时自动尝试加载真实数据；失败则保留解析近似
+try:
+    use_real_profiles()
+except Exception as _e:
+    print(f"[atmosphere] 真实廓线加载失败，回退解析近似: {_e}")
 
 
 def n_air(z_km):
