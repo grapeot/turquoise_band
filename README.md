@@ -6,24 +6,39 @@
 
 ## 状态
 
-- [x] Scaffold（repo / venv / PRD / RFC）
-- [x] Science review（多 agent 调研，见 `docs/SCIENCE_REVIEW.md`）
-- [x] 下载权威数据（O₃ Serdyuchenko 2014 截面、AFGL 大气廓线、CIE CMF）
-- [x] **L0：色相曲线闭环 ✓** —— 红→青→白趋势 + 亮度暴跌 240× 全部自查通过（`outputs/L0_colorband.png`）
-- [ ] L1：定量校核（真实折射几何 + air-mass 增强臭氧柱，把青绿色相从偏蓝拉正）
-- [ ] L2：合成月食照片渲染（月盘几何 + MPS）
+- [x] **L0 辐射传输闭环**：色相曲线红→青→白，实测数据（O₃ Serdyuchenko 2014、AFGL 大气、SAO2010 太阳谱、CIE CMF）
+- [x] **L1 折射几何**：单一映射 `r(h)=(R⊕+h)−α·d_moon`，对照 Mallama Table 3.1 吻合<2%
+- [x] **L2 逐像素反向 RT 渲染**（render_rt.py）：分支感知反查，无 banding，numpy 亚秒级
+- [x] **L3 写实月盘**：NASA 月面纹理 × 物理食光颜色，对数 tone map，忠实亮度（蓝带物理真实地窄）
+- [x] **HDR gain map**：可下 iPhone Photos 的 HEIC（tools/make_gainmap_hdr.swift）
 
-L0 结果：合成色带肉眼可见 **深暗红（本影深处，2-14km）→ 青绿 teal 带（16-36km）→ 白边（36km+）**。
-跑：`source .venv/bin/activate && python src/pipeline.py --self-check`
+### 核心物理结论（经卫星实测 + 文献验证）
+绿松石带本质是**青色（cyan/teal）**、**淡**、**窄**：颜色（R/B）沿月盘是平滑渐变，但
+**"蓝带窄"是亮度现象**——最蓝处亮度仅月盘最亮的 ~4.5%，被旁边暴亮的趋白区盖过，
+真实可见蓝带 ~1-2 arcmin（与 Shu 2024 卫星实测 R/B 0.8-1.0 一致）。网上"半盘饱和蓝"是后期产物。
+
+### 主要输出（outputs/）
+- `moon_realistic_raw.png` — 写实月食照片（忠实亮度，d=47 蓝带过月盘中心）
+- `moon_composite.png` — 剖面诊断（量化蓝带宽度）
+- `moon_brightness_cliff.png` — 两种曝光对比（揭示"蓝带窄是亮度现象"）
+
+### 跑
+```bash
+source .venv/bin/activate
+python src/render_textured.py          # 写实月盘
+python src/diag_composite.py           # 蓝带宽度诊断
+python src/pipeline.py --self-check    # L0 色相曲线
+bash scripts/make_hdr.sh               # 出 HDR HEIC
+```
 
 ## 文档
 
-- `docs/PHYSICS_AND_PITFALLS.md` — **物理方法 + 踩坑全记录**（推荐先读）
-- `docs/PRD.md` — 现象、目标、成功标准、数据需求
-- `docs/RFC.md` — 计算管线技术设计、模块划分、验证钩子
-- `docs/L1_geometry.md` — 折射几何处方（含红核/绿松石带双 limb 修正）
+- `docs/working.md` — **当前权威记录**：Changelog + Key Technical Decisions + Lessons（推荐先读）
+- `docs/PHYSICS_AND_PITFALLS.md` — 物理方法 + 踩坑全记录
+- `docs/L1_geometry.md` — 折射几何处方（单一映射，对照 Mallama）
+- `docs/PRD.md` / `docs/RFC.md` — 目标 / 技术设计
 - `docs/SCIENCE_REVIEW.md` — 文献调研摘要
-- `docs/LOG.md` — 时间线日志
+- `docs/LOG.md` — 早期日志（归档，部分结论已被 working.md 取代）
 
 ## 环境
 
