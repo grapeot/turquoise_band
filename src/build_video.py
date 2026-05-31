@@ -40,6 +40,14 @@ EARTH_TEX = np.asarray(Image.open(_earth_p).convert("RGB"), float) / 255.0 if os
 R_MOON = R.R_MOON_ARCMIN
 R_UMBRA = R.R_UMBRA_ARCMIN
 
+# 全局固定月面曝光：正常月光(shade 返回 Y=1) × 反照率(~0.6中性) × limb 后映到 sRGB~0.92。
+# 不随帧变——保留"月盘随移出本影逐渐变亮"的真实演变。
+_Y_NORMAL = 1.0 * 0.6              # 正常月光×中性反照率(albn≈0.5-0.6)
+MOON_E = R._srgb_inv_gamma(0.92) / _Y_NORMAL
+# 全月面反照率全局百分位(固定, 不随帧变)
+_mY = 0.2126*MOON_TEX[...,0]+0.7152*MOON_TEX[...,1]+0.0722*MOON_TEX[...,2]
+MOON_ALB_LO, MOON_ALB_HI = np.percentile(_mY, 5), np.percentile(_mY, 95)
+
 
 def render_moon_panel(D):
     """左panel：月盘在距本影中心 D 处，食光颜色×月面纹理。忠实亮度。"""
@@ -63,15 +71,14 @@ def render_moon_panel(D):
     ri = np.clip(((90-np.degrees(lat))/180*(Ht-1)).astype(int), 0, Ht-1)
     alb = MOON_TEX[ri, ci]
     albY = (0.2126*alb[...,0]+0.7152*alb[...,1]+0.0722*alb[...,2])
-    lo, hi = np.percentile(albY[inside], 5), np.percentile(albY[inside], 95)
-    albn = np.clip((albY-lo)/max(hi-lo,1e-6)*0.5+0.5, 0.2, 1.2)
+    # 反照率归一用**全月面**全局百分位(MOON_ALB_LO/HI)，不随帧/月盘位置变——
+    # 否则每帧采到不同经度月面、反照率分布不同会让月盘平均亮度跳变。
+    albn = np.clip((albY-MOON_ALB_LO)/max(MOON_ALB_HI-MOON_ALB_LO,1e-6)*0.5+0.5, 0.2, 1.2)
     limb = np.power(np.clip(z,0,1), 0.5)
     XYZ_scene = XYZ * (albn*limb)[...,None]
-    # 忠实亮度曝光(按月盘最亮)
-    Ys = XYZ_scene[...,1]
-    Yb = np.percentile(Ys[inside], 99.5) if inside.any() else 1
-    E = R._srgb_inv_gamma(0.92)/max(Yb,1e-12)
-    rgb = R._srgb_gamma(np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZ_scene, E)),0,1))
+    # 全局固定曝光(不随帧变!): 按"正常月光"(半影外 Y=1, 高地反照率)标定。
+    # 这样本影深处月盘暗、移出后接近正常月光亮——真实演变保留，不被 per-frame 归一抹平。
+    rgb = R._srgb_gamma(np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZ_scene, MOON_E)),0,1))
     rgb = rgb*inside[...,None]
     return _box(rgb, SSAA)
 
