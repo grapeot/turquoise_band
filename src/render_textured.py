@@ -131,8 +131,9 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 # ============================================================
 def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
-                          limb_power=0.5, target_srgb=0.12,
-                          dyn_gamma=0.9, chroma_weight=0.5, saturation=1.15,
+                          limb_power=0.5, target_srgb=0.12, bright_srgb=0.92,
+                          expose_mode="faithful",
+                          dyn_gamma=1.0, chroma_weight=0.5, saturation=1.15,
                           warm_wb=1.06, hdr_headroom=3.0,
                           add_starfield=True, add_grain=True,
                           lut_kwargs=None, seed=7):
@@ -202,11 +203,21 @@ def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
     mod = (alb_norm * limb)[..., None]
     XYZ_scene = XYZ_comp * mod
 
-    # ---- 全局统一曝光（按月盘红核侧标定，禁 per-pixel）----
-    a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["a_lo"])
-    Y_dark = float(np.power(render_rt.shade(np.array([a_near]), tables)[0, 1], dyn_gamma))
-    t = np.clip(R._srgb_inv_gamma(target_srgb), 1e-4, 0.999)
-    exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
+    # ---- 全局统一曝光 ----
+    if expose_mode == "faithful":
+        # 忠实亮度：按月盘**最亮处**标定，保留真实亮度悬崖。蓝带又暗又窄、被旁边
+        # 暴亮的趋白区盖过 → 自然收窄成细带（符合文献"细窄光带"与真实照片）。
+        # 代价：红核很暗（物理真实，红暗无妨）。不为暗部提亮、不掩盖亮度悬崖。
+        Y_scene = XYZ_scene[..., 1]
+        Y_bright = float(np.percentile(Y_scene[inside], 99.5))
+        t = np.clip(R._srgb_inv_gamma(bright_srgb), 1e-4, 0.999)
+        exposure = t / (max(Y_bright, 1e-12) * (1.0 - t))
+    else:
+        # 为暗部曝光：红核侧标到中调（会把暗蓝带提亮显宽，见 diag_brightness_cliff）。
+        a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["a_lo"])
+        Y_dark = float(np.power(render_rt.shade(np.array([a_near]), tables)[0, 1], dyn_gamma))
+        t = np.clip(R._srgb_inv_gamma(target_srgb), 1e-4, 0.999)
+        exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
 
     XYZ_disp = R._tone_map_on_Y(XYZ_scene, exposure)
     rgb = R._xyz_to_srgb_linear(XYZ_disp)
