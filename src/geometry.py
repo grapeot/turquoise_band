@@ -51,13 +51,92 @@ def column_density(h_tangent_km, density_func, s_max_km=1200.0, n_samples=2000):
     return 2.0 * col_half
 
 
-def tangent_height_from_radius(r_norm, h_min=5.0, h_max=80.0):
-    """把月面归一化径向位置映射到擦边高度（L1 会用真实本影几何细化）。
+# ============ L1：折射几何 — 擦边高度 → 本影内角度/径向位置 ============
+# 物理处方见 docs/L1_geometry.md（基于 Robinson 2022, arXiv:2112.08966）。
+# 太阳光掠过地球大气 limb 被折射 α(h) 弯入本影；α(h) ∝ 局地密度 ∝ exp(-h/H)。
+# 关键：α(0)=70 arcmin 已含切点两侧对称双段，不再 ×2。
 
-    占位线性映射：r_norm=0（本影中心）对应低擦边高度 h_min（深红区），
-    r_norm=1（本影边缘）对应高擦边高度 h_max（趋白区）。
-    真实关系由地球本影几何 + 大气折射决定，留待 L1。
+ALPHA0_RAD = 0.0204          # 地表掠射折射偏转角 (rad) ≈ 70 arcmin
+H_REFRAC_KM = 8.0            # 折射标度高度 (km)
+D_MOON_KM = 3.84e5           # 地月距离 (km)
+R_SUN_KM = 6.96e5            # 太阳半径 (km)
+D_SUN_KM = 1.496e8          # 日地距离 (km)
+
+
+def refraction_angle(h_km):
+    """擦边高度 h → 折射偏转角 α(h) (rad)。α(h)=α0·exp(-h/H)，消色差。"""
+    return ALPHA0_RAD * np.exp(-np.asarray(h_km, dtype=float) / H_REFRAC_KM)
+
+
+def umbra_radius_km():
+    """月球处地球本影半径 (km)。会聚影锥：R_u = R⊕ − (R_sun−R⊕)·d_moon/d_sun。"""
+    return R_EARTH - (R_SUN_KM - R_EARTH) * D_MOON_KM / D_SUN_KM
+
+
+def umbra_radius_arcmin():
+    """本影半径的角半径 (arcmin)，从月球看。"""
+    return np.degrees(np.arctan(umbra_radius_km() / D_MOON_KM)) * 60.0
+
+
+def shadow_radius_signed_km(h_km):
+    """擦边高度 h 的光线落在本影内的带符号径向位置 (km)。
+
+    r(h) = (R⊕+h) − α(h)·d_moon
+    第一项：未折射时擦过 limb 在月球处的横向位置；第二项：折射把它拉向轴。
+    负值表示越过本影中心落到对侧（极低 h 的强折射光线）。
+    复现 Robinson 2022 Table 3.1 的 d 列作为 golden 验证。
     """
+    h = np.asarray(h_km, dtype=float)
+    return (R_EARTH + h) - refraction_angle(h) * D_MOON_KM
+
+
+def shadow_radius_norm(h_km, r_outer_km=None):
+    """归一化本影径向位置 r_norm = |r(h)| / r_outer，截断到 [0,1]。
+
+    0=本影中心（红核），1=本影外缘（趋白/半影过渡）。低 h→小 r_norm，高 h→1。
+    r_outer 缺省用未折射几何边界 R⊕（h→∞ 时 r(h)→R⊕，即被照亮区外缘）。
+    注：本影几何边界 R_umbra≈4601km 对应 r_norm≈R_umbra/R⊕≈0.72，
+    即真正的"本影/半影分界"在 r_norm~0.72 处（umbra_norm() 给出）。
+    """
+    if r_outer_km is None:
+        r_outer_km = R_EARTH
+    r = np.abs(shadow_radius_signed_km(h_km))
+    return np.clip(r / r_outer_km, 0.0, 1.0)
+
+
+def umbra_norm():
+    """本影几何边界在 shadow_radius_norm 坐标下的位置（R_umbra/R⊕）。"""
+    return umbra_radius_km() / R_EARTH
+
+
+def shadow_radius_arcmin(h_km):
+    """擦边高度 h 落点距本影中心的角距离 (arcmin)，从月球看。"""
+    r = np.abs(shadow_radius_signed_km(h_km))
+    return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
+
+
+def focusing_factor(h_km, r_floor_km=150.0):
+    """几何聚焦因子（相对亮度增益），∝ b·|dh/dr| / r。
+
+    环带能量守恒：limb 环 [h,h+dh] 供光 ∝ 2π·b·dh，映射到本影环 [r,r+dr] 接收 ∝ 2π·r·dr。
+    故亮度 ∝ b·|dh/dr|/r。低 h 光线被会聚到近中心(小 r)→ 中心更亮（红核虽消光重却最亮）。
+    r_floor：太阳非点源对中心 1/r 发散的正则化软下限。
+    """
+    h = np.asarray(h_km, dtype=float)
+    b = R_EARTH + h
+    dr_dh = 1.0 + refraction_angle(h) * D_MOON_KM / H_REFRAC_KM   # dr/dh
+    dh_dr = 1.0 / dr_dh
+    r = np.maximum(np.abs(shadow_radius_signed_km(h)), r_floor_km)
+    return b * dh_dr / r
+
+
+# 向后兼容别名
+def focusing_jacobian(h_km):
+    return focusing_factor(h_km)
+
+
+def tangent_height_from_radius(r_norm, h_min=5.0, h_max=80.0):
+    """[已弃用] L0 占位线性映射，保留向后兼容。L1 改以 h 为自变量，见上方折射几何。"""
     r_norm = np.clip(np.asarray(r_norm, dtype=float), 0.0, 1.0)
     return h_min + (h_max - h_min) * r_norm
 
@@ -67,4 +146,24 @@ if __name__ == "__main__":
     for h in [10, 30, 50]:
         s, z, ds = limb_path_altitudes(h)
         print(f"擦边高度 {h}km: 视线最低海拔={z.min():.1f}km, 1200km处海拔={z.max():.1f}km")
-    print("自查通过：切向视线在最近点贴近擦边高度，向两侧海拔抬升。")
+    print("自查通过：切向视线在最近点贴近擦边高度，向两侧海拔抬升。\n")
+
+    # ---- L1 折射几何自查：对照 Robinson 2022 Table 3.1 的 d 列 ----
+    print(f"本影半径: {umbra_radius_km():.0f} km = {umbra_radius_arcmin():.1f} arcmin")
+    print("\n擦边高度  α(arcmin)  落点r(带符号,km)  Robinson_d  r_norm  角距(arcmin)")
+    robinson_d = {0: -1620, 8: 3724, 18: 5604, 25: 6142, 32: 6338, 50: 6420}
+    for h in [0, 8, 18, 25, 32, 50]:
+        a_arcmin = np.degrees(refraction_angle(h)) * 60
+        r_signed = shadow_radius_signed_km(h)
+        rn = shadow_radius_norm(h)
+        arcmin = shadow_radius_arcmin(h)
+        print(f"  {h:>4}    {a_arcmin:>7.2f}    {r_signed:>10.0f}      {robinson_d[h]:>6}    {rn:.3f}   {arcmin:.1f}")
+
+    # 验证高 h 端（绿松石带相关）与 Robinson 吻合
+    err_50 = abs(shadow_radius_signed_km(50) - 6420) / 6420
+    err_25 = abs(shadow_radius_signed_km(25) - 6142) / 6142
+    print(f"\nh=50km 相对误差 {err_50*100:.1f}%, h=25km 相对误差 {err_25*100:.1f}%")
+    assert err_50 < 0.05 and err_25 < 0.05, "高h端应与 Robinson Table 3.1 吻合(<5%)"
+    # 方向：低 h → 小 r_norm（本影深处），高 h → r_norm→1（边缘）
+    assert shadow_radius_norm(5) < shadow_radius_norm(40), "低h应落本影深处，高h落边缘"
+    print("L1 折射几何自查通过：映射方向对，高h端与文献吻合。")
