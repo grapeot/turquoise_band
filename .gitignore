@@ -17,3 +17,5 @@ data/raw/moon_texture/*.jpg
 
 # OS
 .DS_Store
+outputs/*.tif
+outputs/*.heic

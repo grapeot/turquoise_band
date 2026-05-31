@@ -133,6 +133,7 @@ def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
                           limb_power=0.5, target_srgb=0.20,
                           dyn_gamma=0.85, chroma_weight=0.5, saturation=0.95,
+                          hdr_headroom=3.0,
                           add_starfield=True, add_grain=True,
                           lut_kwargs=None, seed=7):
     """渲染写实月全食照片：真实月面反照率纹理 × 物理食光颜色。
@@ -211,23 +212,33 @@ def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
     rgb = R._xyz_to_srgb_linear(XYZ_disp)
     rgb = np.clip(rgb, 0.0, None)
 
+    # ---- HDR 线性缓冲（用于 gain map）：同曝光但给亮部 headroom，不做 Reinhard 压缩 ----
+    # SDR 是上面 Reinhard 压到[0,1]的版本；HDR 让亮部(绿松石/白边)线性超过 1.0，
+    # 比值 HDR/SDR 即 gain map。headroom 控制亮部能超亮多少倍。
+    rgb_hdr_lin = R._xyz_to_srgb_linear(XYZ_scene * exposure) * hdr_headroom
+    rgb_hdr_lin = np.clip(rgb_hdr_lin, 0.0, None)
+
     # ---- 叠加真实月面色偏（低权重，增写实，主色相仍由物理决定）----
     if chroma_tex is not None and chroma_weight > 0:
         ctex = chroma_tex[ri, ci]                       # (S,S,3) 月面本征色偏
         ctex = 1.0 + chroma_weight * (ctex - 1.0)       # 朝中性收权重
-        rgb = rgb * ctex
-        rgb = np.clip(rgb, 0.0, None)
+        rgb = np.clip(rgb * ctex, 0.0, None)
+        rgb_hdr_lin = np.clip(rgb_hdr_lin * ctex, 0.0, None)  # HDR 同步色偏
 
     # ---- 饱和度微调（艺术：往中等铜橙靠，不要荧光血红）----
     if saturation != 1.0:
         luma = (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2])[..., None]
         rgb = np.clip(luma + (rgb - luma) * saturation, 0.0, None)
+        luma_h = (0.2126 * rgb_hdr_lin[..., 0] + 0.7152 * rgb_hdr_lin[..., 1] + 0.0722 * rgb_hdr_lin[..., 2])[..., None]
+        rgb_hdr_lin = np.clip(luma_h + (rgb_hdr_lin - luma_h) * saturation, 0.0, None)
 
     # ---- 星空背景（艺术，月盘外）----
     rgb = rgb * inside[..., None]
+    rgb_hdr_lin = rgb_hdr_lin * inside[..., None]
     if add_starfield:
         sky = _starfield(S, rng)
         rgb = np.where(inside[..., None], rgb, sky)
+        rgb_hdr_lin = np.where(inside[..., None], rgb_hdr_lin, R._srgb_inv_gamma(sky))
 
     # gamma
     rgb = R._srgb_gamma(np.clip(rgb, 0.0, 1.0))
@@ -239,12 +250,14 @@ def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
 
     rgb8 = R._box_downsample(rgb, ssaa)
     rgb8 = (np.clip(rgb8, 0, 1) * 255 + 0.5).astype(np.uint8)
+    # HDR 线性下采样（保留 >1）
+    hdr_lin = R._box_downsample(rgb_hdr_lin, ssaa).astype(np.float32)
 
     info = dict(tables=tables, exposure=float(exposure), d=d_arcmin,
                 R_moon=R.R_MOON_ARCMIN, R_umbra=R.R_UMBRA_ARCMIN,
                 extent=(x0, x1, y0, y1), cx_world=cx_world,
                 alb=alb, mu=mu, U=U, V=V, inside=inside, a_grid=a,
-                XYZ_phys=XYZ_phys, alb_ref=alb_ref)
+                XYZ_phys=XYZ_phys, alb_ref=alb_ref, hdr_lin=hdr_lin)
     return rgb8, info
 
 
@@ -351,6 +364,23 @@ def save_png_raw(rgb8, path):
     print(f"已存裸图：{path}")
 
 
+def save_hdr_tiff(hdr_lin, path):
+    """存 32-bit float 线性 sRGB TIFF（含 >1 的 HDR 数据），供 Swift CLI 算 gain map。
+
+    tifffile 优先；缺则用 PIL 存 float32 TIFF。ImageIO/CoreImage 可读。
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    arr = np.ascontiguousarray(hdr_lin.astype(np.float32))
+    try:
+        import tifffile
+        tifffile.imwrite(path, arr)
+    except Exception:
+        from PIL import Image
+        # PIL 对多通道 float TIFF 支持有限，逐通道存或退回 16bit
+        Image.fromarray(arr, mode="RGB" if arr.ndim == 3 else "F").save(path)
+    print(f"已存 HDR 线性 TIFF：{path}  (峰值={arr.max():.2f}, >1 占比 {(arr.max(axis=-1)>1).mean()*100:.1f}%)")
+
+
 if __name__ == "__main__":
     import time
     ap = argparse.ArgumentParser()
@@ -373,4 +403,6 @@ if __name__ == "__main__":
     ok = self_check(info)
     save_png(rgb8, info, os.path.join(OUT, "moon_realistic.png"))
     save_png_raw(rgb8, os.path.join(OUT, "moon_realistic_raw.png"))
+    # HDR 线性缓冲（供 gain map）：SDR base = moon_realistic_raw.png
+    save_hdr_tiff(info["hdr_lin"], os.path.join(OUT, "moon_hdr_linear.tif"))
     print(f"\n{'写实渲染自查通过' if ok else '自查未全通过，检查纹理/几何/三色'}")

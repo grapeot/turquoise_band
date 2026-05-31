@@ -37,6 +37,12 @@
   诊断：梯度被"红核曝光目标"锁死，关键控制点是 target_srgb 而非 dyn_gamma。
   调 target_srgb 0.42→0.24 让红核回深铜红(sRGB lum~51)、dyn_gamma 0.42→0.7，
   远/近亮度比 2.8×→4.8×(真实3:1~5:1中段)，红核占盘面大部分、青绿白退回边缘窄带。
+- displacement 确认不做：月食是满月、太阳正对月面(相位角≈0)，几乎无地形投影阴影。
+- HDR gain map：复用 YabiVision(自有iOS app) 的 Apple ImageIO 写入管线(macOS兼容)，
+  但 gain map 从真实 HDR/SDR 比值精确算(非 YabiVision 从SDR猜)。Python 导出 SDR base
+  + 线性HDR TIFF(峰值~16, 含>1)，Swift CLI(tools/make_gainmap_hdr.swift)算 gain map
+  (log2编码,headroom~5档)写带 gain map 的 HEIC。一条命令: scripts/make_hdr.sh。
+  下 iPhone Photos 亮部(绿松石/白边)超亮。HDR 仅物理iPhone+HDR屏可见。
 
 ## Lessons Learned
 
