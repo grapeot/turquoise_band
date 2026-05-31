@@ -131,8 +131,8 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 # ============================================================
 def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
-                          limb_power=0.5, target_srgb=0.42,
-                          dyn_gamma=0.42, chroma_weight=0.5, saturation=0.92,
+                          limb_power=0.5, target_srgb=0.24,
+                          dyn_gamma=0.7, chroma_weight=0.5, saturation=0.95,
                           add_starfield=True, add_grain=True,
                           lut_kwargs=None, seed=7):
     """渲染写实月全食照片：真实月面反照率纹理 × 物理食光颜色。
