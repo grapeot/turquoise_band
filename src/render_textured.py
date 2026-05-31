@@ -129,7 +129,7 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 # ============================================================
 # 2. 写实月盘渲染：反照率 × 物理食光，线性相乘 → tone-map
 # ============================================================
-def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
+def render_realistic_disk(d_arcmin=40.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
                           limb_power=0.5, target_srgb=0.20,
                           dyn_gamma=0.85, chroma_weight=0.5, saturation=0.95,
@@ -384,7 +384,7 @@ def save_hdr_tiff(hdr_lin, path):
 if __name__ == "__main__":
     import time
     ap = argparse.ArgumentParser()
-    ap.add_argument("--d", type=float, default=26.0, help="月心到本影中心角距 arcmin（默认26，食分≈0.99）")
+    ap.add_argument("--d", type=float, default=40.0, help="月心到本影中心角距 arcmin（默认40，月盘横跨本影边界=蓝带构图）")
     ap.add_argument("--size", type=int, default=1400)
     ap.add_argument("--ssaa", type=int, default=2)
     ap.add_argument("--sub-lat", type=float, default=0.0, help="盘心月面纬度（默认0，正面）")
