@@ -235,20 +235,22 @@ def _xyz_to_srgb_linear(XYZ):
     return XYZ @ _M_XYZ2RGB.T
 
 
-def _tone_map_on_Y(XYZ, E, hi_max=0.90):
+def _tone_map_on_Y(XYZ, E, hi_max=0.90, ey_white=None):
     """全局曝光 + 对数高光肩部，只作用在亮度 Y 上（保色相/色度）。
 
-    Y_disp = hi_max · log2(1 + E·Y) / log2(1 + E·Y_white)
-    其中 E·Y_white 是场景内最亮处的曝光亮度。对数曲线在高光端**仍有斜率**，
-    所以白区（半影/趋白）保留月海纹理的灰度差异、不死白；最亮处映到 hi_max(<1)，
-    彻底不爆。暗部被压得更暗（红核更沉），符合"红暗无所谓、白不死白"的诉求。
+    Y_disp = hi_max · log2(1 + E·Y) / log2(1 + ey_white)
+    ey_white 是"映到 hi_max 的曝光亮度"白点。**必须固定**（不能用输入 max，
+    否则退化成 per-frame/per-call 归一化——视频里会让每帧月亮一样亮）。
+    缺省 ey_white=E·1（正常满亮度 Y=1 映到 hi_max）。暗部(本影深处)经对数曲线
+    保持暗，不被拉亮。
     """
     X, Y, Z = XYZ[..., 0], XYZ[..., 1], XYZ[..., 2]
     Ys = np.maximum(Y, 1e-30)
     cx, cz = X / Ys, Z / Ys
     EY = E * Y
-    EY_white = max(np.max(EY), 1e-6)
-    Yd = hi_max * np.log2(1.0 + EY) / np.log2(1.0 + EY_white)
+    if ey_white is None:
+        ey_white = E * 1.0                       # 固定白点：正常满亮度 Y=1
+    Yd = hi_max * np.log2(1.0 + EY) / np.log2(1.0 + max(ey_white, 1e-6))
     Yd = np.clip(Yd, 0.0, 1.0)
     return np.stack([cx * Yd, Yd, cz * Yd], axis=-1)
 
