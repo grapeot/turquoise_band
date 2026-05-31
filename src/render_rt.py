@@ -39,7 +39,8 @@ def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
 
     # 固定白点：未衰减日光，白点 Y=1（与现有口径一致）
     I_sun = solar.solar_spectrum(lam)
-    k = 1.0 / col.spectrum_to_XYZ(lam, I_sun)[1]
+    white_XYZ = col.spectrum_to_XYZ(lam, I_sun)
+    k = 1.0 / white_XYZ[1]
 
     I = rt.emergent_spectrum(h, lam)                                    # (H,L)
     XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))]) * k  # (H,3)
@@ -51,9 +52,14 @@ def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
     a_mono, h_mono = a[sl], h[sl]
     foc = g.focusing_factor(h)
     foc = foc / foc.max()
+    # 半影/本影外的"正常月光"。物理上半影是太阳被地球部分遮挡，比满月暗（部分光照）。
+    # 取一个中调亮度(penumbra_Y)而非满月 Y=1，使它过 tone-map 后落在中调、月海细节可见、
+    # 不被高光肩部压成死白。色相=中性日光白。
+    penumbra_Y = 0.20
+    white = white_XYZ * k * (penumbra_Y / (white_XYZ[1] * k))
     return dict(a_mono=a_mono, h_mono=h_mono,
                 a_lo=float(a_mono[0]), a_hi=float(a_mono[-1]),
-                h_grid=h, XYZ_grid=XYZ, foc_grid=foc)
+                h_grid=h, XYZ_grid=XYZ, foc_grid=foc, white=white)
 
 
 def _interp_xyz(h_pix, h_grid, XYZ_grid):
@@ -65,13 +71,28 @@ def _interp_xyz(h_pix, h_grid, XYZ_grid):
 
 
 def shade(a_pixel, t):
-    """像素角距(任意 shape) → 线性 XYZ。单一映射 a→h→颜色，无 LUT 角距插值、无 banding。"""
+    """像素角距(任意 shape) → 线性 XYZ。单一映射 a→h→颜色，无 LUT 角距插值、无 banding。
+
+    角距超出 LUT 范围（a > a_hi）= 视线不再深入大气 = 本影外/半影深处，
+    物理上是**正常月光（未经折射/臭氧的直射日光，白）**，不是黑。
+    """
     a = np.asarray(a_pixel, dtype=float)
-    h_pix = np.interp(a, t["a_mono"], t["h_mono"])        # a→h 单调反查
-    in_range = (a >= t["a_lo"]) & (a <= t["a_hi"])
+    a_cl = np.minimum(a, t["a_hi"])                       # 钳到边缘，半影区从边缘值起渐变
+    h_pix = np.interp(a_cl, t["a_mono"], t["h_mono"])     # a→h 单调反查
     XYZ = _interp_xyz(h_pix, t["h_grid"], t["XYZ_grid"])  # h→颜色（光滑）
     foc = np.interp(h_pix, t["h_grid"], t["foc_grid"])    # h→聚焦
-    return XYZ * foc[..., None] * in_range[..., None]
+    out = XYZ * foc[..., None]
+    out = np.where((a >= t["a_lo"])[..., None], out, 0.0) # 内侧极深处之外
+
+    # 本影外/半影 → 从 LUT 边缘值平滑渐变到中性月光白，避免硬边界。
+    beyond = a > t["a_hi"]
+    if np.any(beyond):
+        edge = _interp_xyz(np.array([t["h_mono"][-1]]), t["h_grid"], t["XYZ_grid"])[0] \
+            * np.interp(t["h_mono"][-1], t["h_grid"], t["foc_grid"])
+        frac = np.clip((a - t["a_hi"]) / 12.0, 0.0, 1.0)[..., None]
+        penumbra = edge * (1 - frac) + t["white"] * frac
+        out = np.where(beyond[..., None], penumbra, out)
+    return out
 
 
 # ============================================================

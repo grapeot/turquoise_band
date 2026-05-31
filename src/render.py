@@ -235,16 +235,21 @@ def _xyz_to_srgb_linear(XYZ):
     return XYZ @ _M_XYZ2RGB.T
 
 
-def _tone_map_on_Y(XYZ, E):
-    """全局曝光 + Reinhard，只作用在亮度 Y 上（保色相/色度）。
+def _tone_map_on_Y(XYZ, E, hi_max=0.90):
+    """全局曝光 + 对数高光肩部，只作用在亮度 Y 上（保色相/色度）。
 
-    取色度 (X/Y, Z/Y) 不变，Y_disp = (E*Y)/(1+E*Y)，再乘回色度复原 XYZ。
+    Y_disp = hi_max · log2(1 + E·Y) / log2(1 + E·Y_white)
+    其中 E·Y_white 是场景内最亮处的曝光亮度。对数曲线在高光端**仍有斜率**，
+    所以白区（半影/趋白）保留月海纹理的灰度差异、不死白；最亮处映到 hi_max(<1)，
+    彻底不爆。暗部被压得更暗（红核更沉），符合"红暗无所谓、白不死白"的诉求。
     """
     X, Y, Z = XYZ[..., 0], XYZ[..., 1], XYZ[..., 2]
     Ys = np.maximum(Y, 1e-30)
     cx, cz = X / Ys, Z / Ys
     EY = E * Y
-    Yd = EY / (1.0 + EY)
+    EY_white = max(np.max(EY), 1e-6)
+    Yd = hi_max * np.log2(1.0 + EY) / np.log2(1.0 + EY_white)
+    Yd = np.clip(Yd, 0.0, 1.0)
     return np.stack([cx * Yd, Yd, cz * Yd], axis=-1)
 
 

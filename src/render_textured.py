@@ -129,11 +129,11 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 # ============================================================
 # 2. 写实月盘渲染：反照率 × 物理食光，线性相乘 → tone-map
 # ============================================================
-def render_realistic_disk(d_arcmin=40.0, size=1400, margin_arcmin=3.0, ssaa=2,
+def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
-                          limb_power=0.5, target_srgb=0.20,
-                          dyn_gamma=0.85, chroma_weight=0.5, saturation=0.95,
-                          hdr_headroom=3.0,
+                          limb_power=0.5, target_srgb=0.12,
+                          dyn_gamma=0.9, chroma_weight=0.5, saturation=1.15,
+                          warm_wb=1.06, hdr_headroom=3.0,
                           add_starfield=True, add_grain=True,
                           lut_kwargs=None, seed=7):
     """渲染写实月全食照片：真实月面反照率纹理 × 物理食光颜色。
@@ -231,6 +231,12 @@ def render_realistic_disk(d_arcmin=40.0, size=1400, margin_arcmin=3.0, ssaa=2,
         rgb = np.clip(luma + (rgb - luma) * saturation, 0.0, None)
         luma_h = (0.2126 * rgb_hdr_lin[..., 0] + 0.7152 * rgb_hdr_lin[..., 1] + 0.0722 * rgb_hdr_lin[..., 2])[..., None]
         rgb_hdr_lin = np.clip(luma_h + (rgb_hdr_lin - luma_h) * saturation, 0.0, None)
+
+    # ---- 暖白平衡（艺术：往参考图/血月摄影常用暖调靠，R升B降，白区带粉、暖区更橙红）----
+    if warm_wb != 1.0:
+        wb = np.array([warm_wb, 1.0, 2.0 - warm_wb])    # R×warm, B×(2-warm)
+        rgb = np.clip(rgb * wb, 0.0, None)
+        rgb_hdr_lin = np.clip(rgb_hdr_lin * wb, 0.0, None)
 
     # ---- 星空背景（艺术，月盘外）----
     rgb = rgb * inside[..., None]
@@ -384,7 +390,7 @@ def save_hdr_tiff(hdr_lin, path):
 if __name__ == "__main__":
     import time
     ap = argparse.ArgumentParser()
-    ap.add_argument("--d", type=float, default=40.0, help="月心到本影中心角距 arcmin（默认40，月盘横跨本影边界=蓝带构图）")
+    ap.add_argument("--d", type=float, default=47.0, help="月心到本影中心角距 arcmin（默认47，蓝带交界过月盘中心）")
     ap.add_argument("--size", type=int, default=1400)
     ap.add_argument("--ssaa", type=int, default=2)
     ap.add_argument("--sub-lat", type=float, default=0.0, help="盘心月面纬度（默认0，正面）")
