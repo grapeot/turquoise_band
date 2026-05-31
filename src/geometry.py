@@ -79,39 +79,46 @@ def umbra_radius_arcmin():
 
 
 def shadow_radius_signed_km(h_km):
-    """擦边高度 h 的光线落在本影内的带符号径向位置 (km)。
+    """[贴轴侧 limb] 擦边高度 h 的光线落在本影内距影锥轴的带符号位置 (km)。
 
     r(h) = (R⊕+h) − α(h)·d_moon
-    第一项：未折射时擦过 limb 在月球处的横向位置；第二项：折射把它拉向轴。
-    负值表示越过本影中心落到对侧（极低 h 的强折射光线）。
-    复现 Robinson 2022 Table 3.1 的 d 列作为 golden 验证。
+    这是太阳**贴影锥轴那一侧 limb** 发出、向轴弯的光线落点，描述**红核**的色温分拣
+    与会聚（低 h 强折射 → 落本影深处 → 聚焦增亮）。复现 Robinson 2022 Table 3.1 的 d 列。
+    注意：不要用它定位绿松石带——那条带在月盘外缘，由太阳**对侧 limb** 照亮，
+    用 shadow_radius_opposite_limb()。详见 docs/L1_geometry.md 的"矛盾解开"。
     """
     h = np.asarray(h_km, dtype=float)
     return (R_EARTH + h) - refraction_angle(h) * D_MOON_KM
 
 
-def shadow_radius_norm(h_km, r_outer_km=None):
-    """归一化本影径向位置 r_norm = |r(h)| / r_outer，截断到 [0,1]。
+def shadow_radius_opposite_limb(h_km):
+    """[对侧 limb] 绿松石带/月盘外缘的擦边高度 h → 距影锥轴位置 (km)。
 
-    0=本影中心（红核），1=本影外缘（趋白/半影过渡）。低 h→小 r_norm，高 h→1。
-    r_outer 缺省用未折射几何边界 R⊕（h→∞ 时 r(h)→R⊕，即被照亮区外缘）。
-    注：本影几何边界 R_umbra≈4601km 对应 r_norm≈R_umbra/R⊕≈0.72，
-    即真正的"本影/半影分界"在 r_norm~0.72 处（umbra_norm() 给出）。
+    r(h) = R_umbra − (α(h)·d_moon − h)
+    照亮月盘外缘绿松石带的光来自太阳**对侧 limb**，穿地球另一侧平流层臭氧层。
+    高 h（弱折射）→ 贴本影几何边界 R_umbra；归一化基准用 R_umbra，不是 R⊕。
+    h=25-40km → 38-41 arcmin，紧贴边界 41.2'，与 Mallama/Robinson 自洽。
     """
-    if r_outer_km is None:
-        r_outer_km = R_EARTH
-    r = np.abs(shadow_radius_signed_km(h_km))
-    return np.clip(r / r_outer_km, 0.0, 1.0)
+    h = np.asarray(h_km, dtype=float)
+    return umbra_radius_km() - (refraction_angle(h) * D_MOON_KM - h)
 
 
-def umbra_norm():
-    """本影几何边界在 shadow_radius_norm 坐标下的位置（R_umbra/R⊕）。"""
-    return umbra_radius_km() / R_EARTH
+def shadow_radius_norm(h_km):
+    """归一化本影径向位置 r_norm = |r_opp(h)| / R_umbra，截断到 [0,1]。
+
+    用对侧-limb 映射（月盘外缘视角）。0=本影中心，1=本影几何边界 R_umbra。
+    高 h（绿松石带）→ r_norm→1（贴边界），与文献"绿松石带紧贴本影边界"自洽。
+    """
+    r = np.abs(shadow_radius_opposite_limb(h_km))
+    return np.clip(r / umbra_radius_km(), 0.0, 1.0)
 
 
 def shadow_radius_arcmin(h_km):
-    """擦边高度 h 落点距本影中心的角距离 (arcmin)，从月球看。"""
-    r = np.abs(shadow_radius_signed_km(h_km))
+    """擦边高度 h 落点距本影中心的角距离 (arcmin)，从月球看。
+
+    用对侧-limb 映射（月盘外缘视角），使绿松石带(h~25-40km)落在 38-41'，贴边界。
+    """
+    r = np.abs(shadow_radius_opposite_limb(h_km))
     return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
 
 

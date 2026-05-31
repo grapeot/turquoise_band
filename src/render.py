@@ -1,0 +1,402 @@
+"""L2 月盘 2D 渲染：把 L1 的 1D 径向物理（角距 → 颜色/亮度）贴到一张月盘图上。
+
+设计文档要点（v1，两个先拍板的决策）：
+
+1) 角距坐标口径 —— 采用「口径 B」。
+   shadow_radius_arcmin(h) 在 h→大 时趋向 R⊕ 对应的 57.6'，远超本影几何角半径 41.2'。
+   这 57.6' 不是「本影边界」，而是这套 transmission-only 模型里折射光能落到的最外缘。
+   若照实把 57.6' 当真实角距贴月盘（口径 A），月盘（半径 15.5'）采不到红核、绿松石被推出本影。
+   故把模型角度结构线性压缩进真实本影：a_render = arcmin_model / arcmin_max × 41.2'。
+   红核中心仍在 0'，模型最外缘对齐本影边界 41.2'。这是渲染层的视觉校准，不改物理管线。
+
+2) tone-mapping 曝光 —— 全盘统一曝光，禁止 per-pixel 自适应。
+   本影内亮度跨约 1.5万倍。全局曝光标量 E + Reinhard 在亮度通道上压缩，
+   保住「中心暗红、边缘亮」的相对亮度结构。per-pixel 自动曝光会把红核拉到中灰，破坏观感。
+
+辐射传输复用 radiative_transfer.emergent_spectrum，颜色复用 color，几何复用 geometry，
+本模块只做 LUT 组装 + 月盘几何 + 显示链，不重新实现物理。
+
+用法：
+    python src/render.py                 # 默认 d=22', 1024px，出 moon_disk.png + 对照图
+    python src/render.py --d 18 --size 1536
+"""
+import os
+import sys
+import argparse
+import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(__file__))
+import radiative_transfer as rt
+import color as col
+import geometry
+import solar
+
+OUT = os.path.join(os.path.dirname(__file__), "..", "outputs")
+
+# ---- 几何常数（arcmin），实测值见设计文档附表 ----
+R_MOON_ARCMIN = np.degrees(np.arctan(1737.4 / 384400.0)) * 60.0   # 月盘视半径 ≈ 15.5'
+R_UMBRA_ARCMIN = geometry.umbra_radius_arcmin()                   # 本影角半径 ≈ 41.2'
+
+
+# ============================================================
+# 1. 角距 → 线性 XYZ / Y 的 LUT（口径 B，边缘密采）
+# ============================================================
+def build_lut(n_h=600, h_min=2.0, h_max=70.0, lam_min=380, lam_max=780, n_lam=401,
+              dense_lo=15.0, dense_hi=30.0, dense_extra=400):
+    """构建 1D LUT：渲染角距 a_lut(arcmin) → 线性 XYZ_lum、线性 Y。
+
+    复用 rt.emergent_spectrum（辐射传输）与 col.spectrum_to_XYZ（颜色），与 pipeline.scan 同口径：
+      - 固定白点 = 未衰减入射日光 XYZ，令白点 Y=1（不做 per-height 归一）。
+      - 聚焦因子乘到亮度（只缩放 XYZ，不碰色相）。
+    口径 B：建表轴预先压缩 a_lut = arcmin_model / arcmin_model.max() × R_UMBRA_ARCMIN。
+
+    绿松石带在 h≈18–25km 对应角度极窄，在 [dense_lo, dense_hi] km 额外加密采样，
+    保证绿松石带在最终角距轴上有足够采样点（避免色阶断层）。
+
+    返回
+    ----
+    a_lut    : (N,) 升序渲染角距 (arcmin)，范围约 [0, 41.2]
+    XYZ_lum  : (N,3) 线性 XYZ（含聚焦因子，未做曝光/gamma）
+    Y_lum    : (N,) 线性亮度标量（= XYZ_lum[:,1]，单独存便于 log 域插值/tone-map）
+    meta     : dict，附带 h、hue、arcmin_model 等用于自查
+    """
+    # 以 h 为内部采样变量，绿松石带所在 h 段加密
+    h_uniform = np.linspace(h_min, h_max, n_h)
+    h_dense = np.linspace(dense_lo, dense_hi, dense_extra)
+    h = np.unique(np.concatenate([h_uniform, h_dense]))
+
+    lam = np.linspace(lam_min, lam_max, n_lam)
+
+    # 固定参考白点：未衰减入射日光，令白点 Y=1
+    I_sun = solar.solar_spectrum(lam)
+    white_XYZ = col.spectrum_to_XYZ(lam, I_sun)
+    k = 1.0 / white_XYZ[1]
+    white_XYZ_norm = white_XYZ * k
+
+    # 辐射传输 → 出射谱 → 线性 XYZ（同一 k）
+    I = rt.emergent_spectrum(h, lam)                                   # (H, L)
+    XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))]) * k  # (H,3)
+
+    # L1 聚焦因子（相对增亮），只缩放亮度不碰色相
+    foc = geometry.focusing_jacobian(h)
+    foc = foc / foc.max()
+    XYZ_lum = XYZ * foc[:, None]
+
+    # 角距（模型坐标）→ 口径 B 压缩到真实本影
+    arcmin_model = geometry.shadow_radius_arcmin(h)
+    a_lut_raw = arcmin_model / arcmin_model.max() * R_UMBRA_ARCMIN
+
+    # 按角距升序排
+    order = np.argsort(a_lut_raw)
+    a_lut = a_lut_raw[order]
+    XYZ_lum = XYZ_lum[order]
+    XYZ_hue = XYZ[order]              # 不含聚焦，用于判色相
+    h_s = h[order]
+    arcmin_model_s = arcmin_model[order]
+    Y_lum = XYZ_lum[:, 1]
+
+    # 色相角（用不含聚焦的 XYZ，避免聚焦把红核压暗影响判读）
+    hue = np.array([col.hue_angle(XYZ_hue[i], white_XYZ=white_XYZ_norm)
+                    for i in range(len(h_s))])
+
+    meta = dict(h=h_s, hue=hue, arcmin_model=arcmin_model_s, white_XYZ_norm=white_XYZ_norm,
+                arcmin_max=float(arcmin_model.max()))
+    return a_lut, XYZ_lum, Y_lum, meta
+
+
+def lookup_xyz(a, a_lut, XYZ_lum, Y_lum):
+    """对像素角距数组 a，查 LUT 得线性 XYZ。
+
+    - XYZ 的 X、Z 通道线性插值；亮度 Y 跨 1.5万倍动态范围，在 log 域插值避免暗区台阶。
+    - 端点钳到首尾（a< a_lut[0] 取首，a> a_lut[-1] 取尾）。
+    返回 (..., 3) 线性 XYZ。
+    """
+    a = np.asarray(a, dtype=float)
+    # 色度：用 XYZ 归一到 Y=1 的色度向量插值，再乘回插值后的 Y，保证色相平滑且亮度走 log 域
+    Y_ref = np.maximum(Y_lum, 1e-30)
+    chroma = XYZ_lum / Y_ref[:, None]                 # (N,3)，Y 通道≈1
+    cX = np.interp(a, a_lut, chroma[:, 0])
+    cZ = np.interp(a, a_lut, chroma[:, 2])
+    logY = np.interp(a, a_lut, np.log(Y_ref))
+    Y = np.exp(logY)
+    X = cX * Y
+    Z = cZ * Y
+    return np.stack([X, Y, Z], axis=-1)
+
+
+# ============================================================
+# 2. 月盘几何 + 渲染
+# ============================================================
+def render_disk(d_arcmin=22.0, size=1024, margin_arcmin=4.0, ssaa=2,
+                exposure=None, target_srgb=0.80, lut_kwargs=None):
+    """渲染一张月盘 PNG（线性 XYZ → 全局曝光 → Reinhard → sRGB → 8bit）。
+
+    坐标系：以本影中心 O_umbra 为原点，月盘中心 O_moon 在 +x 方向距离 d 处。
+    画幅覆盖月盘 [d-R_moon-margin, d+R_moon+margin]，正方形。
+    口径 B 已在 LUT 建表时完成，渲染时像素角距 a 直接查表。
+
+    参数
+    ----
+    d_arcmin   : 月心到本影中心角距 (arcmin)，默认 22（食分≈1.1 全食）
+    size       : 输出边长像素
+    ssaa       : 超采样倍率（边缘抗锯齿），每边 ×ssaa，最后 box 下采样
+    exposure   : 全局曝光标量 E；None 则按 target_srgb 反解（让趋白区映到该 sRGB）
+    返回 (rgb8, info)
+    """
+    lut_kwargs = lut_kwargs or {}
+    a_lut, XYZ_lum, Y_lum, meta = build_lut(**lut_kwargs)
+
+    # 画幅：以月盘为中心略放余量
+    half = R_MOON_ARCMIN + margin_arcmin
+    cx_world = d_arcmin                      # 月盘中心 world x
+    x0, x1 = cx_world - half, cx_world + half
+    y0, y1 = -half, half
+
+    # 超采样网格（world 角坐标 arcmin）
+    S = size * ssaa
+    xs = np.linspace(x0, x1, S)
+    ys = np.linspace(y0, y1, S)
+    X_world, Y_world = np.meshgrid(xs, ys)
+
+    # 到本影中心(原点)的角距 a，到月心的距离 r_moon
+    a = np.hypot(X_world, Y_world)
+    r_moon = np.hypot(X_world - cx_world, Y_world)
+
+    inside = r_moon <= R_MOON_ARCMIN
+
+    # 查 LUT 得线性 XYZ（全网格查，月盘外稍后乘 0）
+    XYZ_pix = lookup_xyz(a, a_lut, XYZ_lum, Y_lum)        # (S,S,3)
+
+    # ---- 全局统一曝光标定 ----
+    if exposure is None:
+        # 关键：曝光按「月盘实际能采到」的最亮处标定，不是整个 LUT 的最外缘。
+        # 月盘只覆盖角距 [d-R_moon, d+R_moon]，其最远边缘 a_far=d+R_moon 落在绿松石带，
+        # 是月盘上最亮的区域。让这里映到 sRGB≈target_srgb，绿松石环/外缘弧才可见，
+        # 同时保住红核（最暗，Y 小约 20×）相对偏暗的正确观感。
+        a_far = d_arcmin + R_MOON_ARCMIN
+        Y_bright = float(lookup_xyz(np.array([a_far]), a_lut, XYZ_lum, Y_lum)[0, 1])
+        disp_target_lin = _srgb_inv_gamma(target_srgb)    # 目标线性显示值
+        # Reinhard：E*Y/(1+E*Y) = t  =>  E = t / (Y*(1-t))
+        t = np.clip(disp_target_lin, 1e-4, 0.999)
+        exposure = t / (Y_bright * (1.0 - t))
+
+    # 在亮度上做 Reinhard（不动色相）：取 xyY，压 Y，再回 XYZ
+    XYZ_disp = _tone_map_on_Y(XYZ_pix, exposure)
+
+    # 线性 XYZ → 线性 sRGB → gamma → [0,1]
+    rgb = _xyz_to_srgb_linear(XYZ_disp)
+    rgb = _srgb_gamma(np.clip(rgb, 0.0, 1.0))
+
+    # 月盘外置黑（天空）；月盘 mask 用覆盖率（超采样下采样自然实现 AA）
+    rgb = rgb * inside[..., None]
+
+    # 超采样下采样到目标尺寸（box filter）= 抗锯齿
+    rgb8 = _box_downsample(rgb, ssaa)
+    rgb8 = (np.clip(rgb8, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+    info = dict(a_lut=a_lut, XYZ_lum=XYZ_lum, Y_lum=Y_lum, meta=meta,
+                exposure=float(exposure), d=d_arcmin,
+                R_moon=R_MOON_ARCMIN, R_umbra=R_UMBRA_ARCMIN,
+                extent=(x0, x1, y0, y1), cx_world=cx_world)
+    return rgb8, info
+
+
+# ============================================================
+# 显示链辅助
+# ============================================================
+# sRGB↔linear（IEC 61966-2-1）
+def _srgb_gamma(c):
+    c = np.asarray(c, dtype=float)
+    return np.where(c <= 0.0031308, 12.92 * c, 1.055 * np.power(np.maximum(c, 0), 1 / 2.4) - 0.055)
+
+
+def _srgb_inv_gamma(c):
+    c = np.asarray(c, dtype=float)
+    return np.where(c <= 0.04045, c / 12.92, np.power((c + 0.055) / 1.055, 2.4))
+
+
+# CIE XYZ (D65) → linear sRGB
+_M_XYZ2RGB = np.array([
+    [3.2404542, -1.5371385, -0.4985314],
+    [-0.9692660, 1.8760108, 0.0415560],
+    [0.0556434, -0.2040259, 1.0572252],
+])
+
+
+def _xyz_to_srgb_linear(XYZ):
+    return XYZ @ _M_XYZ2RGB.T
+
+
+def _tone_map_on_Y(XYZ, E):
+    """全局曝光 + Reinhard，只作用在亮度 Y 上（保色相/色度）。
+
+    取色度 (X/Y, Z/Y) 不变，Y_disp = (E*Y)/(1+E*Y)，再乘回色度复原 XYZ。
+    """
+    X, Y, Z = XYZ[..., 0], XYZ[..., 1], XYZ[..., 2]
+    Ys = np.maximum(Y, 1e-30)
+    cx, cz = X / Ys, Z / Ys
+    EY = E * Y
+    Yd = EY / (1.0 + EY)
+    return np.stack([cx * Yd, Yd, cz * Yd], axis=-1)
+
+
+def _box_downsample(img, f):
+    """整数倍 box 下采样 (S,S,C) -> (S/f, S/f, C)。"""
+    if f == 1:
+        return img
+    S = img.shape[0]
+    n = S // f
+    img = img[:n * f, :n * f]
+    return img.reshape(n, f, n, f, img.shape[2]).mean(axis=(1, 3))
+
+
+# ============================================================
+# 3. 自查 + 出图
+# ============================================================
+def self_check(info):
+    """沿 O_umbra→O_moon 方向在月盘上采一条线，打印红核/绿松石/白边的角距范围与代表色 sRGB。"""
+    a_lut, XYZ_lum, Y_lum = info["a_lut"], info["XYZ_lum"], info["Y_lum"]
+    E = info["exposure"]
+    d, R_moon = info["d"], info["R_moon"]
+
+    print("\n=== 月盘渲染自查 ===")
+    print(f"月盘半径 {R_moon:.1f}'  本影半径 {info['R_umbra']:.1f}'  月心偏移 d={d:.1f}'  全局曝光 E={E:.3g}")
+    mag = (info["R_umbra"] + R_moon - d) / (2 * R_moon)
+    print(f"食甚食分 mag={mag:.2f}（>1 为全食）")
+
+    # 沿连线方向：world x 从 d-R_moon 到 d+R_moon，y=0；对应到本影中心角距 a=|x|
+    xs = np.linspace(d - R_moon, d + R_moon, 400)
+    a_line = np.abs(xs)
+    XYZ_line = lookup_xyz(a_line, a_lut, XYZ_lum, Y_lum)
+    XYZ_disp = _tone_map_on_Y(XYZ_line, E)
+    rgb = _srgb_gamma(np.clip(_xyz_to_srgb_linear(XYZ_disp), 0, 1))
+    R, G, B = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+
+    # 分类（与 pipeline.self_check 同口径：用 sRGB 通道关系）
+    near_white = (R > 0.85) & (G > 0.85) & (B > 0.85)
+    red_mask = (R > B + 0.06) & (R >= G) & (~near_white)
+    teal_mask = (B >= R - 0.02) & (~near_white) & (G > 0.15) & (~red_mask)
+
+    def rep(mask, name):
+        if not mask.any():
+            print(f"  {name}: 未出现")
+            return
+        amin, amax = a_line[mask].min(), a_line[mask].max()
+        # 代表色取该段中位像素
+        idx = np.where(mask)[0]
+        mid = idx[len(idx) // 2]
+        c = (rgb[mid] * 255).astype(int)
+        print(f"  {name}: 角距 {amin:.1f}–{amax:.1f}'  代表色 sRGB=({c[0]},{c[1]},{c[2]})")
+
+    rep(red_mask, "红核区(暖)")
+    rep(teal_mask, "绿松石环(冷)")
+    rep(near_white, "趋白/外缘")
+
+    # 三色径向次序：沿月盘从近本影中心一侧(x小)到远侧(x大)，应 红→青→白
+    print("\n  径向次序检查（x: 近中心→远边缘）:")
+    seq = []
+    for frac, label in [(0.10, "近中心"), (0.5, "盘中"), (0.92, "远边缘")]:
+        i = int(frac * (len(xs) - 1))
+        c = (rgb[i] * 255).astype(int)
+        seq.append(f"{label} a={a_line[i]:.1f}' sRGB=({c[0]},{c[1]},{c[2]})")
+    for s in seq:
+        print("   ", s)
+
+    order_ok = (red_mask.any() and teal_mask.any() and
+                a_line[red_mask].mean() < a_line[teal_mask].mean())
+    print(f"\n  [{'OK' if order_ok else 'XX'}] 红核角距均值 < 绿松石环角距均值（红在内、青在外）")
+    return order_ok
+
+
+def save_disk_png(rgb8, info, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "Heiti SC", "STHeiti"]
+    plt.rcParams["axes.unicode_minus"] = False
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ext = info["extent"]
+    ax.imshow(rgb8, extent=[ext[0], ext[1], ext[2], ext[3]], origin="lower")
+    ax.set_xlabel("角距 x (arcmin)，原点=本影中心")
+    ax.set_ylabel("角距 y (arcmin)")
+    ax.set_title(f"月全食月盘 (L1物理, 口径B, d={info['d']:.0f}', 食分≈{(info['R_umbra']+info['R_moon']-info['d'])/(2*info['R_moon']):.2f})\n"
+                 "基于 L1 物理，色相微调中（绿松石偏蓝待 air-mass 臭氧修正）", fontsize=10)
+    # 标本影边界圆弧
+    th = np.linspace(0, 2 * np.pi, 400)
+    ax.plot(info["R_umbra"] * np.cos(th), info["R_umbra"] * np.sin(th),
+            ls="--", color="gray", lw=0.8, alpha=0.6, label=f"本影边界 {info['R_umbra']:.0f}'")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.set_aspect("equal")
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f"已存月盘图：{path}")
+
+
+def save_disk_with_legend(rgb8, info, path):
+    """月盘 + 旁边角距色带图例的对照图。"""
+    a_lut, XYZ_lum, Y_lum = info["a_lut"], info["XYZ_lum"], info["Y_lum"]
+    E = info["exposure"]
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "Heiti SC", "STHeiti"]
+    plt.rcParams["axes.unicode_minus"] = False
+
+    fig = plt.figure(figsize=(12, 7))
+    gs = fig.add_gridspec(2, 2, width_ratios=[3, 1.4], height_ratios=[20, 1])
+
+    ax = fig.add_subplot(gs[:, 0])
+    ext = info["extent"]
+    ax.imshow(rgb8, extent=[ext[0], ext[1], ext[2], ext[3]], origin="lower")
+    ax.set_xlabel("角距 x (arcmin)，原点=本影中心")
+    ax.set_ylabel("角距 y (arcmin)")
+    ax.set_title(f"月全食月盘 2D 渲染（L1 物理，口径 B 重归一到本影 {info['R_umbra']:.0f}'）",
+                 fontsize=11)
+    th = np.linspace(0, 2 * np.pi, 400)
+    ax.plot(info["R_umbra"] * np.cos(th), info["R_umbra"] * np.sin(th),
+            ls="--", color="gray", lw=0.8, alpha=0.6)
+    ax.set_aspect("equal")
+
+    # 右上：角距色带图例（同一曝光链）
+    a_axis = np.linspace(a_lut[0], a_lut[-1], 512)
+    XYZ_band = lookup_xyz(a_axis, a_lut, XYZ_lum, Y_lum)
+    rgb_band = _srgb_gamma(np.clip(_xyz_to_srgb_linear(_tone_map_on_Y(XYZ_band, E)), 0, 1))
+    axb = fig.add_subplot(gs[0, 1])
+    axb.imshow(rgb_band[None, :, :], aspect="auto", extent=[a_axis[0], a_axis[-1], 0, 1])
+    axb.set_yticks([])
+    axb.set_xlabel("距本影中心角距 (arcmin)\n小=红核  大=绿松石/白")
+    axb.set_title("LUT 角距色带（同一曝光）\n暗红 → 绿松石 → 白", fontsize=9)
+
+    # 右下：说明文字
+    axt = fig.add_subplot(gs[1, 1])
+    axt.axis("off")
+    mag = (info["R_umbra"] + info["R_moon"] - info["d"]) / (2 * info["R_moon"])
+    axt.text(0, 0.5, f"d={info['d']:.0f}'  食分≈{mag:.2f}  E={info['exposure']:.2g}\n"
+                     "基于 L1 物理，色相微调中", fontsize=8, va="center")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f"已存对照图：{path}")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--d", type=float, default=22.0, help="月心到本影中心角距 arcmin")
+    ap.add_argument("--size", type=int, default=1024)
+    ap.add_argument("--ssaa", type=int, default=2)
+    ap.add_argument("--exposure", type=float, default=None)
+    args = ap.parse_args()
+
+    import time
+    t0 = time.time()
+    rgb8, info = render_disk(d_arcmin=args.d, size=args.size, ssaa=args.ssaa,
+                             exposure=args.exposure)
+    dt = time.time() - t0
+    print(f"渲染 {args.size}x{args.size} (SSAA×{args.ssaa}) 用时 {dt:.2f}s")
+
+    ok = self_check(info)
+
+    save_disk_png(rgb8, info, os.path.join(OUT, "moon_disk.png"))
+    save_disk_with_legend(rgb8, info, os.path.join(OUT, "moon_disk_legend.png"))
+    print(f"\n{'渲染自查通过' if ok else '径向次序未通过，检查口径/几何'}")

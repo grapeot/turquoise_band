@@ -233,6 +233,10 @@ def self_check(h, hue, Y, rgb_color, arcmin=None, Y_trans=None):
     if arcmin is not None and teal_mask.any():
         print(f"绿松石带角位置: {arcmin[teal_mask].min():.1f}–{arcmin[teal_mask].max():.1f} arcmin "
               f"(本影边界 {geometry.umbra_radius_arcmin():.1f}')")
+        # 用 sRGB 红蓝比判偏蓝程度（比 CIELAB hue 角更诚实，见 LOG.md C 线诊断）
+        tb = teal_mask
+        rb_ratio = (R[tb].mean() + 1e-6) / (B[tb].mean() + 1e-6)
+        print(f"绿松石带 sRGB 红蓝比 R/B = {rb_ratio:.2f} (文献微偏蓝 0.8-1.0；<0.8 偏蓝偏多)")
 
     mono = np.mean(np.diff(Y_trans) > 0)
     print(f"透射亮度随高度上升的比例: {mono*100:.0f}%")
