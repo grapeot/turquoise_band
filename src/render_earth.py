@@ -30,7 +30,9 @@ H_ATM = 30.0                                                         # 环径向
 # 大气环真实角厚度仅 ~1.3%（H_ATM/R_E），细到几乎看不见。展示用夸张放大，
 # 标注清楚这是艺术放大（径向颜色映射的物理不变，只是把薄环拉宽以可见）。
 RING_FRAC_TRUE = 80.0 / g.R_EARTH                                    # ~1.3% 真实(0-80km全大气)
-RING_FRAC = 0.10                                                     # 展示固定环厚 10%（艺术放大~8×）
+# 环厚度用**真实物理值**(1.3%)，不撑厚。要看清靠小 fov 长焦放大——这样曲率也跟着
+# 放大(那一小段弧被放大显得更弯)，才是真实的"长焦看薄环"，而非把环physically撑厚。
+RING_FRAC = RING_FRAC_TRUE                                          # ~1.3% 真实厚度
 
 
 def _ring_color_table(n=400):
@@ -45,7 +47,7 @@ def _ring_color_table(n=400):
 
 def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
                        sun_dir_deg=0.0, earth_tex=None, ring_tables=None,
-                       fov=None, center=None):
+                       fov=None, center=None, return_linear=False):
     """渲染一帧"从月面中心看地球"。
 
     D_arcmin: 月心距本影中心角距（= 太阳中心相对地球中心的偏移），0=正中本影。
@@ -122,6 +124,8 @@ def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
     rgb_ring = rgb_ring * bright[..., None]         # 方位亮度调制
     rgb[in_ring] = rgb_ring[in_ring]
 
+    if return_linear:
+        return _box(np.clip(rgb, 0, None), ssaa)        # 线性HDR(供16bit/后期)
     # tone map + gamma（环很亮，地球很暗）
     rgb = R._srgb_gamma(np.clip(rgb, 0, 1))
     rgb8 = (np.clip(_box(rgb, ssaa), 0, 1) * 255 + 0.5).astype(np.uint8)

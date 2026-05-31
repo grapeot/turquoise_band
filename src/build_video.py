@@ -52,8 +52,9 @@ _mY = 0.2126*MOON_TEX[...,0]+0.7152*MOON_TEX[...,1]+0.0722*MOON_TEX[...,2]
 MOON_ALB_LO, MOON_ALB_HI = np.percentile(_mY, 5), np.percentile(_mY, 95)
 
 
-def render_moon_panel(D):
-    """左panel：月盘在距本影中心 D 处，食光颜色×月面纹理。忠实亮度。"""
+def render_moon_panel(D, hdr=False):
+    """左panel：月盘在距本影中心 D 处，食光颜色×月面纹理。
+    hdr=True 返回线性HDR场景值(含全动态范围,供16bit/float后期); False返回8bit显示预览。"""
     S = PANEL * SSAA
     # 画幅固定看月盘(以月心为中心)
     half = R_MOON * 1.15
@@ -78,26 +79,50 @@ def render_moon_panel(D):
     # 否则每帧采到不同经度月面、反照率分布不同会让月盘平均亮度跳变。
     albn = np.clip((albY-MOON_ALB_LO)/max(MOON_ALB_HI-MOON_ALB_LO,1e-6)*0.5+0.5, 0.2, 1.2)
     limb = np.power(np.clip(z,0,1), 0.5)
-    # 动态范围压缩(全局固定 gamma): 血月本影最深与正常月光差~1.5万倍, 单一曝光容不下。
-    # 对亮度做 Y^DYN_GAMMA 压缩(色相不动), 把血月提到可见暗红, 同时正常月光不爆。
-    # DYN_GAMMA 固定不随帧→保留"随移出变亮"的演变(只是压缩了对比, 不是 per-frame 归一)。
+    # HDR 线性场景值(物理真实, 含全动态范围): 食光 × 反照率 × limb, 未压缩未tone-map。
+    # 这是后期 HDR 处理的最大信息量来源(血月最深~6e-5 到 正常月光~1, 1.5万倍真实范围)。
+    XYZ_hdr = XYZ * (albn*limb)[...,None]
+    rgb_hdr = np.clip(R._xyz_to_srgb_linear(XYZ_hdr), 0, None) * inside[...,None]
+    if hdr:
+        return _box(rgb_hdr, SSAA)
+    # 显示版(8-bit预览): 动态范围压缩(全局固定 gamma) + 固定曝光 + tone-map。
     Yp = np.maximum(XYZ[...,1], 1e-30)
     chroma_xyz = XYZ / Yp[...,None]
     Y_comp = np.power(Yp, DYN_GAMMA)
     XYZ_comp = chroma_xyz * Y_comp[...,None]
     XYZ_scene = XYZ_comp * (albn*limb)[...,None]
-    # 全局固定曝光(不随帧变): 正常月光(Y=1经压缩仍≈1)映到亮, 本影深处映到暗红可见。
     rgb = R._srgb_gamma(np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZ_scene, MOON_E)),0,1))
     rgb = rgb*inside[...,None]
     return _box(rgb, SSAA)
 
 
-def render_earth_panel(D):
-    """右panel：站月面中心看地球，长焦看亮侧(底部)那段大气环。"""
-    rgb8 = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
-                                 ring_tables=RING_T, fov=20.0,
-                                 center=(0.0, -RE.ANG_EARTH), sun_dir_deg=-90.0)
-    return rgb8.astype(float)/255.0
+def render_earth_panel(D, hdr=False):
+    """右panel：站月面中心看地球，长焦看亮侧(底部)那段大气环。
+    hdr=True 返回线性HDR(地球环高动态)；否则8bit显示。"""
+    # 真实薄环(1.3%)→小fov长焦放大看清; 弧因只看地球缘极小一段而趋平(真实,像ISS看地平线)。
+    # center 对准环带(地球缘 r=ANG_EARTH 稍外), fov 让环+少量地球/天空入画。
+    ring_mid = RE.ANG_EARTH * (1.0 + RE.RING_FRAC * 0.5)
+    rgb = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
+                                ring_tables=RING_T, fov=3.0,
+                                center=(0.0, -ring_mid), sun_dir_deg=-90.0,
+                                return_linear=hdr)
+    return rgb if hdr else rgb.astype(float)/255.0
+
+
+def _render_hdr_frame(args):
+    """渲一帧 16-bit 线性 TIFF(供后期HDR处理)。左月面右地球都用线性HDR。"""
+    import tifffile
+    i, D = args
+    moon = render_moon_panel(D, hdr=True)        # 线性, 含 >1
+    earth = render_earth_panel(D, hdr=True)
+    gap = np.zeros((PANEL, 6, 3))
+    frame = np.concatenate([moon, gap, earth], axis=1).astype(np.float32)
+    # 16-bit: 线性值缩放到 [0,65535]。归一基准固定(正常月光线性≈1→某高值)，保留相对HDR。
+    # 用固定 scale 让正常月光(1.0)落在 ~16000(留 4× headroom 给地球环亮部)。
+    HDR_SCALE = 16000.0
+    f16 = np.clip(frame * HDR_SCALE, 0, 65535).astype(np.uint16)
+    tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16)
+    return i
 
 
 def _box(img, f):
