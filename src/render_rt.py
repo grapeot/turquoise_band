@@ -44,18 +44,16 @@ def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
     I = rt.emergent_spectrum(h, lam)                                    # (H,L)
     XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))]) * k  # (H,3)
 
-    tables = {}
-    for name, a_of_h in [("axis", g.axis_arcmin), ("opp", g.shadow_radius_arcmin)]:
-        a = a_of_h(h)
-        i_min = int(np.argmin(a))            # 角距极小值 → 分支分界
-        sl = slice(i_min, None)              # 取极小值以上的单调上升支
-        a_mono, h_mono = a[sl], h[sl]
-        foc = g.focusing_factor(h)
-        foc = foc / foc.max()
-        tables[name] = dict(a_mono=a_mono, h_mono=h_mono,
-                            a_lo=float(a_mono[0]), a_hi=float(a_mono[-1]),
-                            h_grid=h, XYZ_grid=XYZ, foc_grid=foc)
-    return tables
+    # 单一折射映射（几何已厘清：月面某径向坐标只由一族同侧 limb 光照亮，无"对侧"分支）。
+    a = g.shadow_radius_arcmin(h)
+    i_min = int(np.argmin(a))                # 角距极小值 → 分支分界
+    sl = slice(i_min, None)                  # 取极小值以上的单调上升支
+    a_mono, h_mono = a[sl], h[sl]
+    foc = g.focusing_factor(h)
+    foc = foc / foc.max()
+    return dict(a_mono=a_mono, h_mono=h_mono,
+                a_lo=float(a_mono[0]), a_hi=float(a_mono[-1]),
+                h_grid=h, XYZ_grid=XYZ, foc_grid=foc)
 
 
 def _interp_xyz(h_pix, h_grid, XYZ_grid):
@@ -66,20 +64,14 @@ def _interp_xyz(h_pix, h_grid, XYZ_grid):
     return (1 - w) * XYZ_grid[idx - 1] + w * XYZ_grid[idx]
 
 
-def shade(a_pixel, tables):
-    """像素角距(任意 shape) → 线性 XYZ。两 limb 辐照叠加。无 LUT 角距插值。"""
+def shade(a_pixel, t):
+    """像素角距(任意 shape) → 线性 XYZ。单一映射 a→h→颜色，无 LUT 角距插值、无 banding。"""
     a = np.asarray(a_pixel, dtype=float)
-    XYZ_total = np.zeros(a.shape + (3,))
-    for name in ("axis", "opp"):
-        t = tables[name]
-        # a→h 单调反查（分支内严格单调）
-        h_pix = np.interp(a, t["a_mono"], t["h_mono"])
-        in_range = (a >= t["a_lo"]) & (a <= t["a_hi"])
-        # h→颜色（光滑）+ h→聚焦
-        XYZ = _interp_xyz(h_pix, t["h_grid"], t["XYZ_grid"])
-        foc = np.interp(h_pix, t["h_grid"], t["foc_grid"])
-        XYZ_total += XYZ * foc[..., None] * in_range[..., None]
-    return XYZ_total
+    h_pix = np.interp(a, t["a_mono"], t["h_mono"])        # a→h 单调反查
+    in_range = (a >= t["a_lo"]) & (a <= t["a_hi"])
+    XYZ = _interp_xyz(h_pix, t["h_grid"], t["XYZ_grid"])  # h→颜色（光滑）
+    foc = np.interp(h_pix, t["h_grid"], t["foc_grid"])    # h→聚焦
+    return XYZ * foc[..., None] * in_range[..., None]
 
 
 # ============================================================
@@ -107,7 +99,7 @@ def render_disk_rt(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
 
     # 全局曝光「为暗部曝光」：按月盘红核侧标定，红核可见、绿松石/白靠 Reinhard 收高光
     if exposure is None:
-        a_near = max(d_arcmin - R_MOON_ARCMIN, tables["opp"]["a_lo"])
+        a_near = max(d_arcmin - R_MOON_ARCMIN, tables["a_lo"])
         Y_dark = float(shade(np.array([a_near]), tables)[0, 1])
         t = np.clip(_srgb_inv_gamma(expose_srgb), 1e-4, 0.999)
         exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
@@ -129,7 +121,7 @@ def self_check(tables, d=26.0):
     xs = np.linspace(d - R_MOON_ARCMIN, d + R_MOON_ARCMIN, 600)
     a = np.abs(xs)
     XYZ = shade(a, tables)
-    a_near = max(d - R_MOON_ARCMIN, tables["opp"]["a_lo"])
+    a_near = max(d - R_MOON_ARCMIN, tables["a_lo"])
     Y_dark = float(shade(np.array([a_near]), tables)[0, 1])
     E = np.clip(_srgb_inv_gamma(0.32), 1e-4, 0.999) / max(Y_dark, 1e-12)
     rgb = _srgb_gamma(np.clip(_xyz_to_srgb_linear(_tone_map_on_Y(XYZ, E)), 0, 1))

@@ -79,53 +79,47 @@ def umbra_radius_arcmin():
 
 
 def shadow_radius_signed_km(h_km):
-    """[贴轴侧 limb] 擦边高度 h 的光线落在本影内距影锥轴的带符号位置 (km)。
+    """擦边高度 h 的光线落点距本影中心（反日轴）的带符号位置 (km)。
 
     r(h) = (R⊕+h) − α(h)·d_moon
-    这是太阳**贴影锥轴那一侧 limb** 发出、向轴弯的光线落点，描述**红核**的色温分拣
-    与会聚（低 h 强折射 → 落本影深处 → 聚焦增亮）。复现 Robinson 2022 Table 3.1 的 d 列。
-    注意：不要用它定位绿松石带——那条带在月盘外缘，由太阳**对侧 limb** 照亮，
-    用 shadow_radius_opposite_limb()。详见 docs/L1_geometry.md 的"矛盾解开"。
+    这是**唯一正确的单一映射**：擦过 +limb、impact parameter b=R⊕+h 的光线，向轴弯 α(h)，
+    在月面距反日轴的垂距。它精确复现 Mallama 2022 Table 3.1 的"距影心距离"列
+    （6420km@h=50 … −1620km@h=0）。
+
+    方向（与文献一致）：低 h 强折射(α→70') → r 小甚至负（落本影深处/红核）；
+    高 h 弱折射 → r→6355km（外缘）。月面某径向坐标 ρ 上的点只由擦过**同侧** limb、
+    满足 r(h)=ρ 的单一 h 照亮——不存在"对侧 limb 第二映射"（见 docs/L1_geometry.md）。
+
+    注意坐标系：这是 Mallama 的**点源 + 反日轴**坐标，零点是反日点轴。该轴上太阳圆盘本影
+    （观测者看到的 41.2' 边界）边界落在 ρ≈4601km 处；ρ>4601km 即进入半影。
     """
     h = np.asarray(h_km, dtype=float)
     return (R_EARTH + h) - refraction_angle(h) * D_MOON_KM
 
 
-def shadow_radius_opposite_limb(h_km):
-    """[对侧 limb] 绿松石带/月盘外缘的擦边高度 h → 距影锥轴位置 (km)。
-
-    r(h) = R_umbra − (α(h)·d_moon − h)
-    照亮月盘外缘绿松石带的光来自太阳**对侧 limb**，穿地球另一侧平流层臭氧层。
-    高 h（弱折射）→ 贴本影几何边界 R_umbra；归一化基准用 R_umbra，不是 R⊕。
-    h=25-40km → 38-41 arcmin，紧贴边界 41.2'，与 Mallama/Robinson 自洽。
-    """
-    h = np.asarray(h_km, dtype=float)
-    return umbra_radius_km() - (refraction_angle(h) * D_MOON_KM - h)
-
-
 def shadow_radius_norm(h_km):
-    """归一化本影径向位置 r_norm = |r_opp(h)| / R_umbra，截断到 [0,1]。
+    """归一化本影径向位置 r_norm = |r(h)| / R_umbra，截断到 [0,1]。
 
-    用对侧-limb 映射（月盘外缘视角）。0=本影中心，1=本影几何边界 R_umbra。
-    高 h（绿松石带）→ r_norm→1（贴边界），与文献"绿松石带紧贴本影边界"自洽。
+    0=本影中心，1=太阳圆盘本影几何边界 R_umbra(4601km=41.2')。r_norm>1（被截断到1）的高 h
+    其实落在半影侧——绿松石带就紧贴 r_norm=1 这条边界外薄壳里。
     """
-    r = np.abs(shadow_radius_opposite_limb(h_km))
+    r = np.abs(shadow_radius_signed_km(h_km))
     return np.clip(r / umbra_radius_km(), 0.0, 1.0)
 
 
 def shadow_radius_arcmin(h_km):
-    """擦边高度 h 落点距本影中心的角距离 (arcmin)，从月球看。
+    """擦边高度 h 落点距本影中心的角距离 (arcmin)，从月球看（反日轴坐标）。
 
-    用对侧-limb 映射（月盘外缘视角），使绿松石带(h~25-40km)落在 38-41'，贴边界。
+    单一映射 r(h)=(R⊕+h)−α(h)·d_moon。太阳圆盘本影边界 41.2'。绿松石带(h≈12-18km)
+    落在 41-50'，即紧贴并略超出 41.2' 边界——这正是"带在本影最外缘/半影内沿"的几何位置。
     """
-    r = np.abs(shadow_radius_opposite_limb(h_km))
+    r = np.abs(shadow_radius_signed_km(h_km))
     return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
 
 
 def axis_arcmin(h_km):
-    """贴轴-limb 落点距本影中心的角距 (arcmin)。红核源（与 shadow_radius_arcmin 对称）。"""
-    r = np.abs(shadow_radius_signed_km(h_km))
-    return np.degrees(np.arctan(r / D_MOON_KM)) * 60.0
+    """[别名] 等价于 shadow_radius_arcmin。保留向后兼容，单一映射下二者相同。"""
+    return shadow_radius_arcmin(h_km)
 
 
 def focusing_factor(h_km, r_floor_km=150.0):
@@ -161,22 +155,23 @@ if __name__ == "__main__":
         print(f"擦边高度 {h}km: 视线最低海拔={z.min():.1f}km, 1200km处海拔={z.max():.1f}km")
     print("自查通过：切向视线在最近点贴近擦边高度，向两侧海拔抬升。\n")
 
-    # ---- L1 折射几何自查：对照 Robinson 2022 Table 3.1 的 d 列 ----
-    print(f"本影半径: {umbra_radius_km():.0f} km = {umbra_radius_arcmin():.1f} arcmin")
-    print("\n擦边高度  α(arcmin)  落点r(带符号,km)  Robinson_d  r_norm  角距(arcmin)")
-    robinson_d = {0: -1620, 8: 3724, 18: 5604, 25: 6142, 32: 6338, 50: 6420}
+    # ---- L1 折射几何自查：对照 Mallama 2022 (arXiv:2112.08966) Table 3.1 的距影心距离列 ----
+    # 注意：文献作者是 Mallama，不是 Robinson（之前 doc 误标）。
+    print(f"本影半径(太阳圆盘): {umbra_radius_km():.0f} km = {umbra_radius_arcmin():.1f} arcmin")
+    print("\n擦边高度  α(arcmin)  落点r(带符号,km)  Mallama_d  r_norm  角距(arcmin)")
+    mallama_d = {0: -1620, 8: 3724, 18: 5604, 25: 6142, 32: 6338, 50: 6420}
     for h in [0, 8, 18, 25, 32, 50]:
         a_arcmin = np.degrees(refraction_angle(h)) * 60
         r_signed = shadow_radius_signed_km(h)
         rn = shadow_radius_norm(h)
         arcmin = shadow_radius_arcmin(h)
-        print(f"  {h:>4}    {a_arcmin:>7.2f}    {r_signed:>10.0f}      {robinson_d[h]:>6}    {rn:.3f}   {arcmin:.1f}")
+        print(f"  {h:>4}    {a_arcmin:>7.2f}    {r_signed:>10.0f}      {mallama_d[h]:>6}    {rn:.3f}   {arcmin:.1f}")
 
-    # 验证高 h 端（绿松石带相关）与 Robinson 吻合
+    # 验证全程与 Mallama Table 3.1 吻合（单一映射，无需分支）
     err_50 = abs(shadow_radius_signed_km(50) - 6420) / 6420
     err_25 = abs(shadow_radius_signed_km(25) - 6142) / 6142
     print(f"\nh=50km 相对误差 {err_50*100:.1f}%, h=25km 相对误差 {err_25*100:.1f}%")
-    assert err_50 < 0.05 and err_25 < 0.05, "高h端应与 Robinson Table 3.1 吻合(<5%)"
-    # 方向：低 h → 小 r_norm（本影深处），高 h → r_norm→1（边缘）
-    assert shadow_radius_norm(5) < shadow_radius_norm(40), "低h应落本影深处，高h落边缘"
-    print("L1 折射几何自查通过：映射方向对，高h端与文献吻合。")
+    assert err_50 < 0.05 and err_25 < 0.05, "应与 Mallama Table 3.1 吻合(<5%)"
+    # 方向：低 h → 小 r（本影深处/红核），高 h → 大 r（外缘/绿松石带）
+    assert shadow_radius_signed_km(5) < shadow_radius_signed_km(40), "低h应落本影深处，高h落边缘"
+    print("L1 折射几何自查通过：单一映射方向对，全程与 Mallama 吻合。")

@@ -203,7 +203,7 @@ def render_realistic_disk(d_arcmin=26.0, size=1400, margin_arcmin=3.0, ssaa=2,
     XYZ_scene = XYZ_comp * mod
 
     # ---- 全局统一曝光（按月盘红核侧标定，禁 per-pixel）----
-    a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["opp"]["a_lo"])
+    a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["a_lo"])
     Y_dark = float(np.power(render_rt.shade(np.array([a_near]), tables)[0, 1], dyn_gamma))
     t = np.clip(R._srgb_inv_gamma(target_srgb), 1e-4, 0.999)
     exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
