@@ -139,6 +139,33 @@ def build_disk_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
                 ang_sun=_ang_sun_arcmin(), a_lo=float(a_signed.min()), a_hi=float(a_signed.max()))
 
 
+def build_disk_lut(n_h=300000, n_xi=257, bin_width=0.08, a_lo=18.0, a_hi=72.0):
+    """金标准圆盘 ray tracing 的 a→XYZ LUT(与 d 无关, 建一次全帧复用)。
+
+    复用 brute_ray_trace 的撒线+分箱(focusing从落点密度自然涌现), 得各角距 a 的积分 XYZ。
+    归一: 趋白外缘 Y→正常月光 1.0。返回 dict(a, XYZ, a_lo, a_hi) 供 shade_disk_lut 查。
+    """
+    import brute_ray_trace as bt
+    res = bt.brute_trace(n_h=n_h, n_xi=n_xi, bin_width=bin_width,
+                         a_grid_lo=a_lo, a_grid_hi=a_hi)
+    a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"]
+    yref = np.percentile(XYZ[Y > 0, 1], 99)
+    XYZ = XYZ / max(yref, 1e-9)
+    # 边缘外(a>a_hi 已无 bin): 趋白正常月光; 内侧(a<最内有效)→深本影渐黑由LUT自然给
+    return dict(a=a, XYZ=XYZ, a_lo=float(a[0]), a_hi=float(a[-1]),
+                white=XYZ[np.argmax(a[Y > 0])] if (Y > 0).any() else np.array([1.0, 1.0, 1.0]))
+
+
+def shade_disk_lut(a_pixel, lut):
+    """按角距查圆盘 LUT → 线性 XYZ。超 a_hi=趋白正常月光(直射), 低于内缘=深本影(LUT给)。"""
+    a = np.asarray(a_pixel, dtype=float)
+    out = np.empty(a.shape + (3,))
+    for c in range(3):
+        out[..., c] = np.interp(a, lut["a"], lut["XYZ"][:, c],
+                                left=lut["XYZ"][0, c], right=lut["XYZ"][-1, c])
+    return out
+
+
 def shade_disk(a_pixel, t, n_xi=257):
     """太阳圆盘 ray tracing 着色：像素角距 a(任意shape) → 圆盘积分线性 XYZ(含focusing)。
 

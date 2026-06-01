@@ -27,7 +27,9 @@ SSAA = 2
 
 # 预建物理表（复用）
 print("建物理表...")
-MOON_T = render_rt.build_branch_tables(n_h=8000, use_focus=False)  # 关聚焦去亮斑
+# 月面食光: 圆盘 ray tracing 金标准 LUT(太阳圆盘有限元, 非点源)——绿松石带浅青软边、靠内,
+# 物理正确(见 PHYSICS_AND_PITFALLS 二·五)。a→XYZ 与 d 无关, 建一次全帧复用。亮斑天然无(圆盘正则化)。
+MOON_LUT = render_rt.build_disk_lut(n_h=300000, n_xi=257)
 RING_T = RE._ring_color_table()
 # 月面纹理 + 地球夜面
 Image.MAX_IMAGE_PIXELS = None
@@ -98,7 +100,7 @@ def render_moon_panel(D, hdr=False, mark=True):
     a = np.hypot(X, Y)                         # 到本影中心角距
     rmoon = np.hypot(X - cx, Y)
     inside = rmoon <= R_MOON
-    XYZ = render_rt.shade(a, MOON_T)
+    XYZ = render_rt.shade_disk_lut(a, MOON_LUT)
     # 月面纹理(正交投影) × 食光
     U = (X - cx) / R_MOON; V = Y / R_MOON
     z = np.sqrt(np.clip(1 - U*U - V*V, 0, 1))
