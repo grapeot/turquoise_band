@@ -43,6 +43,57 @@ EARTH_TEX = np.asarray(Image.open(_earth_p).convert("RGB"), float) / 255.0 if os
 R_MOON = R.R_MOON_ARCMIN
 R_UMBRA = R.R_UMBRA_ARCMIN
 
+# ── 第四格: 绿松石带光谱成因 panel(随帧动态: 透射窗口随D对应擦边高度移动) ──
+import cross_sections as _CS
+import radiative_transfer as _RT
+import brute_ray_trace as _BT
+_SPEC_LAM = np.linspace(380, 780, 401)
+_SPEC_RAY = _CS.sigma_rayleigh(_SPEC_LAM); _SPEC_RAY_N = _SPEC_RAY / _SPEC_RAY.max()
+_SPEC_O3 = _CS.sigma_o3(_SPEC_LAM); _SPEC_O3_N = _SPEC_O3 / _SPEC_O3.max()
+_SPEC_HGRID = np.linspace(0, 80, 2000); _SPEC_AGRID = _BT.a_signed_arcmin(_SPEC_HGRID)
+
+def _wl_rgb(wl):
+    if wl < 440: r, gg, b = -(wl-440)/60, 0, 1
+    elif wl < 490: r, gg, b = 0, (wl-440)/50, 1
+    elif wl < 510: r, gg, b = 0, 1, -(wl-510)/20
+    elif wl < 580: r, gg, b = (wl-510)/70, 1, 0
+    elif wl < 645: r, gg, b = 1, -(wl-645)/65, 0
+    else: r, gg, b = 1, 0, 0
+    return max(0,min(1,r)), max(0,min(1,gg)), max(0,min(1,b))
+
+def render_spectrum_panel(D, size=None):
+    """光谱成因 panel(8bit RGB): 瑞利+臭氧谱 + 当前D月心擦边高度的透射窗口(随帧移动)。"""
+    import matplotlib; matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    size = size or PANEL
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "PingFang SC", "Heiti SC"]
+    plt.rcParams["axes.unicode_minus"] = False
+    # 月心角距D → 擦边高度h(反查 a_signed)
+    h_now = float(np.interp(D, _SPEC_AGRID, _SPEC_HGRID)) if D <= _SPEC_AGRID.max() else 80.0
+    h_now = max(h_now, 1.0)
+    fig, ax = plt.subplots(figsize=(size/100, size/100), facecolor="black", dpi=100)
+    ax.set_facecolor("black")
+    for w in np.arange(380, 778, 3):
+        ax.axvspan(w, w+3, 0, 0.05, color=_wl_rgb(w), alpha=0.7)
+    ax.plot(_SPEC_LAM, _SPEC_RAY_N, color="#6cf", lw=2, label="瑞利散射 ∝λ⁻⁴")
+    ax.plot(_SPEC_LAM, _SPEC_O3_N, color="#fa6", lw=2, label="臭氧 Chappuis 吸收")
+    T = _RT.transmission_matrix(np.array([h_now]), _SPEC_LAM)[0]
+    ax.fill_between(_SPEC_LAM, 0, T, color="#9f9", alpha=0.32)
+    ax.plot(_SPEC_LAM, T, color="#9f9", lw=1.5, label=f"透射窗口 (擦边 {h_now:.0f} km)")
+    ax.set_xlim(380, 780); ax.set_ylim(0, 1.05)
+    ax.set_xlabel("波长 (nm)", color="w", fontsize=9)
+    ax.set_title("绿松石带的光谱成因", color="w", fontsize=11)
+    ax.tick_params(colors="w", labelsize=8)
+    ax.legend(loc="upper right", fontsize=7.5, facecolor="#222", labelcolor="w", framealpha=0.75)
+    for s in ax.spines.values(): s.set_color("#888")
+    fig.tight_layout()
+    fig.canvas.draw()
+    buf = np.asarray(fig.canvas.buffer_rgba())[..., :3].copy()
+    plt.close(fig)
+    if buf.shape[0] != size:
+        buf = np.asarray(Image.fromarray(buf).resize((size, size)))
+    return buf  # 8bit RGB (size,size,3)
+
 def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
     """每panel独立 SDR tone map(无floor, 时间全局定死, 不per-frame)。
 
@@ -201,22 +252,26 @@ def _render_hdr_frame(args):
     """渲一帧 HDR: 三panel各自独立线性→nits映射(像SDR那样独立), 拼接后PQ编码。"""
     import tifffile
     i, D = args
-    # 三panel各自线性HDR
+    # 四panel各自线性HDR(2×2)
     moon = render_moon_panel(D, hdr=True)
     full = render_earth_full_panel(D, hdr=True)
     close = render_earth_panel(D, hdr=True)
-    gap = np.zeros((PANEL, 6, 3), np.float32)
-    # (1) 线性 TIFF(后期用): 拼接线性帧, 固定scale。
-    lin = np.concatenate([moon, gap, full, gap, close], axis=1).astype(np.float32)
-    _add_hdr_markers(lin)
-    f16_lin = np.clip(lin * 16000.0, 0, 65535).astype(np.uint16)
+    g = 6
+    # 每panel独立映射到nits。光谱panel(8bit)→nits(当作SDR内容, 映到~200nit白)。
+    moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)
+    full_n = _panel_to_nits(full, FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE)
+    close_n = _panel_to_nits(close, CLOSE_HDR_EXP, CLOSE_HDR_BLACK, CLOSE_HDR_WHITE)
+    spec8 = render_spectrum_panel(D).astype(np.float32) / 255.0
+    spec_n = R._srgb_inv_gamma(spec8) * 200.0    # 光谱图按SDR内容映到200nit
+    gapv = np.zeros((PANEL, g, 3), np.float32); gaph = np.zeros((g, PANEL*2+g, 3), np.float32)
+    nits = np.concatenate([
+        np.concatenate([moon_n, gapv, full_n], axis=1),
+        gaph,
+        np.concatenate([close_n, gapv, spec_n], axis=1)], axis=0).astype(np.float32)
+    # (1) 线性 TIFF(后期用)
+    f16_lin = np.clip(nits / 200.0 * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
-    # (2) HDR视频: 每panel独立映射到nits(地球不被月球带亮、保各自亮度增量), 拼接后PQ。
-    moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)    # 月球独立
-    full_n = _panel_to_nits(full, FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE)    # 全景独立
-    close_n = _panel_to_nits(close, CLOSE_HDR_EXP, CLOSE_HDR_BLACK, CLOSE_HDR_WHITE)  # 特写独立
-    nits = np.concatenate([moon_n, gap, full_n, gap, close_n], axis=1)
-    _add_hdr_markers(nits, val=MOON_HDR_WHITE)         # marker用白点nits亮度
+    # (2) HDR视频 PQ
     pq = _pq_encode(nits)
     pq16 = (np.clip(pq, 0, 1) * 65535 + 0.5).astype(np.uint16)
     # 角分文字: 8bit渲染文字蒙版, 叠到PQ帧(PIL不支持16bit RGB绘字, 故用蒙版)。
@@ -283,12 +338,16 @@ def _box(img, f):
 
 
 def _assemble(D, hdr=False):
-    """三栏: 左月球 | 中地球全景(带三角标观测点) | 右大气环长焦特写。"""
-    moon = render_moon_panel(D, hdr=hdr)
-    full = render_earth_full_panel(D, hdr=hdr)
-    close = render_earth_panel(D, hdr=hdr)
-    gap = np.zeros((PANEL, 6, 3))
-    return np.concatenate([moon, gap, full, gap, close], axis=1)
+    """2×2: [月面 | 地球全景] / [大气特写 | 光谱成因]。手机竖屏友好。"""
+    moon = render_moon_panel(D, hdr=hdr)            # 左上
+    full = render_earth_full_panel(D, hdr=hdr)      # 右上
+    close = render_earth_panel(D, hdr=hdr)          # 左下
+    spec = render_spectrum_panel(D).astype(np.float64) / 255.0  # 右下(8bit→[0,1])
+    g = 6
+    gapv = np.zeros((PANEL, g, 3)); gaph = np.zeros((g, PANEL*2+g, 3))
+    top = np.concatenate([moon, gapv, full], axis=1)
+    bot = np.concatenate([close, gapv, spec], axis=1)
+    return np.concatenate([top, gaph, bot], axis=0)
 
 
 def _render_one(args):

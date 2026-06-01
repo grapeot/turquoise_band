@@ -26,12 +26,12 @@ import render_textured as rtx
 OUT = R.OUT
 Rm = R.R_MOON_ARCMIN
 
-# 位置: 绿松石带交界在横向 2/3 处。圆盘版最蓝在 40', 点源版在 ~52'。
-# 用 d 让"该步的绿松石带角距"落在月盘横向 2/3。月盘横向范围 [d-Rm, d+Rm], 2/3 处 = d-Rm + (4/3)Rm = d + Rm/3。
-# 要 R/B 谷在 2/3 处: d + Rm/3 = a_blue → d = a_blue - Rm/3。
-# 但前几步(点源)和后几步(圆盘)蓝带位置不同。为视频连贯, 统一用一个 d。
-# 折中: 用点源蓝带~50'(步4高潮所在), d = 50 - Rm/3 ≈ 45。这样步4青带在2/3, 步5圆盘青带会左移些。
-D_ABLATION = 45.0
+# 位置 normalize: 绿松石带固定在月盘横向 2/3 处(d + Rm/3 = a_blue → d = a_blue - Rm/3)。
+# 加太阳圆盘后青带从点源52.6'移到圆盘40.4', 若固定d青带会偏移、观众难懂。所以每步单独调d,
+# 让该步青带都落2/3, 差别只剩颜色本身。无青带步(1-3)用步4(臭氧点源)的d对齐, 月盘几何位置一致。
+# (各 a_blue 由物理算得: 点源臭氧52.6', 圆盘40.4'; d = a_blue - Rm/3, Rm/3≈5.2')
+D_POINT_BLUE = 47.4    # 步1-4: 点源青带@52.6→2/3
+D_DISK_BLUE = 35.2     # 步5-6: 圆盘青带@40.4→2/3
 
 
 def _build_lut_pointsource(**kw):
@@ -74,30 +74,39 @@ def _shade_lut(a_pixel, lut):
 
 # ── 6 步定义 ────────────────────────────────────────────────────────────
 # 每步: (key, 标题, 注释, LUT构造, 是否带纹理, 是否夸张)
+# d: normalize 青带到 2/3。步1-4(点源几何)用 D_POINT_BLUE, 步5-6(圆盘)用 D_DISK_BLUE。
 STEPS = [
     dict(key="1_disk",    title="① 土圆盘 + 月面纹理",
          note="最土的起点：一个有月海纹理的灰白月亮（无任何食光物理）",
-         mode="flat_tex"),
+         mode="flat_tex", d=D_POINT_BLUE),
     dict(key="2_geom",    title="② + 几何遮挡（无折射、黑白）",
          note="日食几何：若没有大气折射，地球完全挡住太阳，本影内该全黑、外全白（硬边）",
-         mode="geom"),
+         mode="geom", d=D_POINT_BLUE),
     dict(key="3_rayleigh", title="③ + 瑞利散射",
          note="本影内不再全黑——瑞利散射 ∝λ⁻⁴ 把蓝光散尽，只剩红光：血月",
-         mode="point", kw=dict(ozone=False)),
+         mode="point", kw=dict(ozone=False), d=D_POINT_BLUE),
     dict(key="4_ozone",   title="④ + 臭氧 Chappuis 吸收",
          note="红的内沿冒出一条青带！臭氧吃掉橙红光（500-650nm）——这就是绿松石带",
-         mode="point", kw=dict()),
+         mode="point", kw=dict(), d=D_POINT_BLUE),
     dict(key="5_disk",    title="⑤ + 太阳圆盘（有限元）",
-         note="太阳不是点：16′圆盘比青带还宽5倍，把浓青糊成浅青软边、并左移——真实没那么浓",
-         mode="disk", n_disp=1),
+         note="太阳不是点：16′圆盘比青带还宽5倍，把浓青糊成浅青软边——真实没那么浓",
+         mode="disk", n_disp=1, d=D_DISK_BLUE),
     dict(key="6_full",    title="⑥ + 实测太阳谱 + 折射色散",
          note="最后两个二阶修正：实测太阳谱微调色相、大气色散让边缘更柔——最终真实效果",
-         mode="disk", n_disp=16),
+         mode="disk", n_disp=16, d=D_DISK_BLUE),
 ]
 
 
-def render_step(step, size=1200, ssaa=2, enhance=True, d=D_ABLATION):
-    """渲染一步。enhance=True 夸张增强(对比图/视频), False 真实版(步6结尾)。"""
+# HDR nits tone mapping(与视频月面 panel 同一套): nits = black + exp·Y·white。
+# 输出线性 nits 值(16bit TIFF), 剪辑软件里自己微调色相/对比。不做夸张增强/饱和/色偏。
+MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.1, 200.0   # 同 build_video
+
+
+def render_step(step, size=1200, ssaa=2):
+    """渲染一步 → 线性 RGB(HDR nits 映射, 月面 panel 同套 tone mapping)。
+    返回 (rgb_lin_nits float32 (size,size,3)) 供存 16bit TIFF。绿松石带已 normalize 到 2/3。
+    """
+    d = step.get("d", D_POINT_BLUE)
     S = size * ssaa
     half = Rm + 3.0
     xs = np.linspace(d - half, d + half, S)
@@ -106,7 +115,6 @@ def render_step(step, size=1200, ssaa=2, enhance=True, d=D_ABLATION):
     a = np.hypot(Xw, Yw)
     U = (Xw - d) / Rm; V = Yw / Rm
     inside = np.hypot(U, V) <= 1.0
-    z = np.sqrt(np.clip(1 - U*U - V*V, 0, 1))
 
     # 月面纹理(正交投影)
     alb_tex, chroma_tex = rtx.load_albedo_texture()
@@ -116,13 +124,15 @@ def render_step(step, size=1200, ssaa=2, enhance=True, d=D_ABLATION):
     import geometry as g
     mode = step["mode"]
     if mode == "flat_tex":
-        # 土圆盘+纹理: 纯反照率×白光(无食光), 满月态
-        XYZ_phys = np.ones((S, S, 3)) * np.array([0.95, 1.0, 1.05])  # 接近白(中性月光)
+        XYZ_phys = np.ones((S, S, 3)) * np.array([0.95, 1.0, 1.05])
     elif mode == "geom":
-        # 纯几何遮挡(无折射): 本影内(a<本影半径)=黑(光线被地球直挡), 外=白。硬边。
-        # 这是"如果没有大气折射, 日食月亮该全黑"的教学态——揭示折射是月食不全黑的原因。
+        # 本影内: 不是纯黑, 留极暗月面纹理(月亮还在、只是没被照亮)——作为连续锚点贯穿6步,
+        # 也符合真实(地球反照/星光让无折射全食月仍隐约可见)。本影外=直射白。
         Rumbra = g.umbra_radius_arcmin()
-        XYZ_phys = np.where((a <= Rumbra)[..., None], 0.0, np.array([0.95, 1.0, 1.05]))
+        umbra = (a <= Rumbra)[..., None]
+        white = np.array([0.95, 1.0, 1.05])
+        dark = white * 0.04          # 本影内极暗(满量程~4%, 纹理由后面 alb 调制显出来)
+        XYZ_phys = np.where(umbra, dark, white)
     elif mode == "point":
         lut = _build_lut_pointsource(**step.get("kw", {}))
         XYZ_phys = _shade_lut(a, lut)
@@ -130,69 +140,51 @@ def render_step(step, size=1200, ssaa=2, enhance=True, d=D_ABLATION):
         lut = _build_lut_disk(n_disp=step.get("n_disp", 1))
         XYZ_phys = _shade_lut(a, lut)
 
+    # 反照率 × 食光 × limb → 线性场景 XYZ
     XYZ_scene = XYZ_phys * (alb / 0.12 * limb)[..., None]
+    rgb_lin = np.clip(R._xyz_to_srgb_linear(XYZ_scene), 0, None) * inside[..., None]
 
-    # tone map
-    Yp = np.maximum(XYZ_scene[..., 1], 1e-30); chroma = XYZ_scene / Yp[..., None]
-    if enhance:
-        dg, sat, pct, tgt = 0.5, 1.6, 90, 0.88   # 夸张: 强压缩+提饱和
-    else:
-        dg, sat, pct, tgt = 0.6, 1.2, 95, 0.90   # 真实: 温和
-    Yc = np.power(Yp, dg); XYZc = chroma * Yc[..., None]
-    Yb = np.percentile(XYZc[..., 1][inside], pct)
-    t = R._srgb_inv_gamma(tgt); E = t / (max(Yb, 1e-12) * (1 - t))
-    rgb = np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZc, E)), 0, None)
-    # 月面色偏(增写实)
-    ctex = chroma_tex[ri, ci]; ctex = 1.0 + 0.5 * (ctex - 1.0); rgb = np.clip(rgb * ctex, 0, None)
-    # 饱和
-    luma = (0.2126*rgb[..., 0]+0.7152*rgb[..., 1]+0.0722*rgb[..., 2])[..., None]
-    rgb = np.clip(luma + (rgb - luma) * sat, 0, None)
-    rgb = R._srgb_gamma(np.clip(rgb, 0, 1)) * inside[..., None]
-    rgb8 = R._box_downsample(rgb, ssaa)
-    return (np.clip(rgb8, 0, 1) * 255 + 0.5).astype(np.uint8)
+    # HDR nits tone mapping(月面 panel 同套): nits = black + exp·Y·white(线性, 不压gamma)
+    Y = np.maximum(0.2126*rgb_lin[..., 0]+0.7152*rgb_lin[..., 1]+0.0722*rgb_lin[..., 2], 1e-12)
+    nits_Y = MOON_HDR_BLACK + MOON_HDR_EXP * Y * MOON_HDR_WHITE
+    rgb_nits = rgb_lin * (nits_Y / Y)[..., None] * inside[..., None]
+
+    return R._box_downsample(rgb_nits, ssaa).astype(np.float32)
 
 
-def add_annotations(rgb8, title, note, enhanced=True):
-    """加版式: 左上=改动标题, 左下=小字注释。"""
-    from PIL import Image, ImageDraw, ImageFont
-    im = Image.fromarray(rgb8); d = ImageDraw.Draw(im); W, H = im.size
-    def font(sz):
-        for fp in ["/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-                   "/System/Library/Fonts/STHeiti Medium.ttc"]:
-            try: return ImageFont.truetype(fp, sz)
-            except Exception: pass
-        return ImageFont.load_default()
-    # 左上标题(大)
-    d.text((28, 24), title, fill=(255, 255, 255), font=font(int(H*0.040)))
-    # 左下注释(小字)
-    note_y = H - int(H*0.075)
-    d.text((28, note_y), note, fill=(200, 210, 220), font=font(int(H*0.024)))
-    if enhanced:
-        # 增强标注(右下角小字)
-        en = "图像经对比度夸张增强，以更鲜明显示该因素的效果"
-        ft = font(int(H*0.020))
-        bb = d.textbbox((0,0), en, font=ft)
-        d.text((W - (bb[2]-bb[0]) - 28, H - int(H*0.040)), en, fill=(150, 160, 175), font=ft)
-    return np.asarray(im)
+# 全局定标(所有6张共用→tone mapping globally consistent, 跨图可比)。
+# 全局峰值~236nit(满月白盘), 定标到满量程让最亮像素撑满16bit、不溢出。
+ABLATION_NITS_FULL = 240.0    # 6张共用: 240nit → 65535(满量程)
+
+
+def save_tiff16(rgb_nits, path):
+    """存 16-bit 线性 TIFF。全局固定定标(ABLATION_NITS_FULL→满量程), 6张可比, linear。
+    最亮像素(满月白~236nit)接近撑满65535; 修图软件里线性、跨图对比有意义。
+    """
+    import tifffile
+    arr16 = np.clip(rgb_nits / ABLATION_NITS_FULL * 65535.0, 0, 65535).astype(np.uint16)
+    tifffile.imwrite(path, arr16)
+
+
+def save_preview_png(rgb_nits, path):
+    """存 8bit PNG 预览(同全局定标+gamma压到可视, 仅供肉眼检查, 不是交付物)。"""
+    from PIL import Image
+    prev = np.clip(rgb_nits / ABLATION_NITS_FULL, 0, 1) ** (1/2.2)
+    Image.fromarray((prev * 255).astype(np.uint8)).save(path)
 
 
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--size", type=int, default=1200)
+    ap.add_argument("--size", type=int, default=1400)
     ap.add_argument("--ssaa", type=int, default=2)
     args = ap.parse_args()
-    os.makedirs(os.path.join(OUT, "ablation"), exist_ok=True)
-    from PIL import Image
-    for i, step in enumerate(STEPS):
-        enh = render_step(step, size=args.size, ssaa=args.ssaa, enhance=True)
-        enh = add_annotations(enh, step["title"], step["note"], enhanced=True)
-        p = os.path.join(OUT, "ablation", f"step_{step['key']}.png")
-        Image.fromarray(enh).save(p)
-        print(f"  saved {p}")
-    # 步6真实版(视频结尾)
-    real = render_step(STEPS[-1], size=args.size, ssaa=args.ssaa, enhance=False)
-    real = add_annotations(real, "最终：真实物理效果", "不经增强——这就是太阳圆盘下绿松石带的真实样子：浅青、靠内、柔和", enhanced=False)
-    Image.fromarray(real).save(os.path.join(OUT, "ablation", "step_7_real.png"))
-    print("  saved step_7_real.png (真实版)")
-    print("ablation 6步+真实版 渲染完成")
+    abldir = os.path.join(OUT, "ablation")
+    os.makedirs(abldir, exist_ok=True)
+    for step in STEPS:
+        rgb = render_step(step, size=args.size, ssaa=args.ssaa)
+        save_tiff16(rgb, os.path.join(abldir, f"step_{step['key']}.tif"))
+        save_preview_png(rgb, os.path.join(abldir, f"step_{step['key']}_preview.png"))
+        print(f"  saved step_{step['key']}.tif (16bit线性nits) + preview")
+    print("ablation 6步 16bit线性TIFF渲染完成(HDR nits tone map, 绿松石带normalize到2/3)")
+    print(f"交付: {abldir}/step_*.tif — 剪辑软件里调色相/对比(全局定标 {ABLATION_NITS_FULL}nit→满量程, 6张可比)")
