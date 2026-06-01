@@ -305,28 +305,24 @@ def forward_trace(
     )
 
 
-def build_lut_from_raytrace(res=None, a_hi=72.0, **trace_kw):
+def build_lut_from_raytrace(res=None, a_hi=73.0, **trace_kw):
     """从真 ray tracing 径向剖面建 a(arcmin)→XYZ LUT, 兼容 render_rt.shade_disk_lut 接口。
 
     res: forward_trace 结果(None 则现跑一次)。返回 dict(a, XYZ): a 角距(arcmin), XYZ 线性。
-    满月 clamp: 剖面外缘(出本影后)的折射光边缘 → clamp 到峰值(正常月光), 避免视频右缘变暗。
-    本影中心暗到真实(-13档), 替换旧 build_disk_lut(偏亮 -7.7)。
+    含半影直射光: 本影中心-13档(古铜血月)→半影区直射光渐入→出本影满月, 全程ray tracing涌现,
+    **无硬clamp**(直射光实现后剖面自然到满月)。替换旧 build_disk_lut(偏亮-7.7)。
+    默认 grid/h_direct_max 覆盖满月(73')。
     """
     import numpy as _np
     if res is None:
+        # 默认参数覆盖满月: grid_half_km 大、h_direct_max 含直射光
+        trace_kw.setdefault("grid_half_km", 9000.0)
+        trace_kw.setdefault("h_direct_max", 3000.0)
         res = forward_trace(verbose=False, **trace_kw)
     rc_km = _np.asarray(res["r_cent"]); XYZ_r = _np.asarray(res["XYZ_r"])
     a = _np.degrees(_np.arctan(rc_km / D_MOON)) * 60.0
     ok = _np.isfinite(XYZ_r[:, 1]) & (a <= a_hi)
     a = a[ok]; XYZ = XYZ_r[ok].copy()
-    # 出本影端 clamp 到真满月直射: 折射 ray tracing 只统计擦 limb 的光, 出本影后是不经折射的
-    # 直射日光(满月), 那部分不在剖面里(剖面峰值仅 ~0.02)。把峰值后 clamp 到归一化满月白(Y=1,
-    # 用未衰减日光的 XYZ 色), 让 LUT 覆盖到满月。本影内(真实暗-13档)不动。
-    i_peak = int(_np.argmax(XYZ[:, 1]))
-    lam = _np.linspace(380, 780, 201)
-    white_XYZ = col.spectrum_to_XYZ(lam, solar.solar_spectrum(lam))
-    white_XYZ = white_XYZ / max(white_XYZ[1], 1e-12)   # 归一 Y=1(满月直射)
-    XYZ[i_peak:] = white_XYZ
     return dict(a=a, XYZ=XYZ)
 
 
