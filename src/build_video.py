@@ -20,14 +20,14 @@ FRAMEDIR = os.path.join(OUT, "video_frames")
 HDRDIR = os.path.join(OUT, "video_frames_hdr")
 os.makedirs(FRAMEDIR, exist_ok=True)
 
-N_FRAMES = 360
-D_MIN, D_MAX = 0.0, 60.0
+N_FRAMES = 300            # 从 D=10' 开始(跳过 D=0-10' 那段月盘全深本影、变化小/反直觉)
+D_MIN, D_MAX = 10.0, 60.0
 PANEL = 540          # 每半边像素
 SSAA = 2
 
 # 预建物理表（复用）
 print("建物理表...")
-MOON_T = render_rt.build_branch_tables(n_h=8000)
+MOON_T = render_rt.build_branch_tables(n_h=8000, use_focus=False)  # 关聚焦去亮斑
 RING_T = RE._ring_color_table()
 # 月面纹理 + 地球夜面
 Image.MAX_IMAGE_PIXELS = None
@@ -41,10 +41,27 @@ EARTH_TEX = np.asarray(Image.open(_earth_p).convert("RGB"), float) / 255.0 if os
 R_MOON = R.R_MOON_ARCMIN
 R_UMBRA = R.R_UMBRA_ARCMIN
 
-# 全局固定月面曝光：正常月光(shade 返回 Y=1) × 反照率(~0.6中性) × limb 后映到 sRGB~0.92。
-# 不随帧变——保留"月盘随移出本影逐渐变亮"的真实演变。
-# 全局动态范围压缩 gamma(固定不随帧): 血月最深~6e-5 与正常月光~1 差1.5万倍,
-# Y^DYN_GAMMA 把这压进可见范围。越小压得越狠(血月越亮)。0.35 让血月落暗红可见。
+def _panel_tonemap(rgb_lin, exposure, floor, white=1.0):
+    """每panel独立的SDR tone map(时间上全局定死,不per-frame)。
+    设计(用户方案): 暗部clip保底+亮部柔和压。
+      显示亮度 = floor + (1-floor)·Reinhard(E·Y/white) , 暗部至少抬到floor(可见)。
+      色相保持: 按亮度映射比缩放RGB。floor让最暗也>0可见; 亮部Reinhard软压不爆。
+    """
+    Y = np.maximum(0.2126*rgb_lin[...,0]+0.7152*rgb_lin[...,1]+0.0722*rgb_lin[...,2], 1e-12)
+    EY = exposure * Y / white
+    Yd = floor + (1.0 - floor) * (EY / (1.0 + EY))     # 暗部抬到floor, 亮部Reinhard软压
+    Yd = np.clip(Yd, 0, 1)
+    scale = (Yd / Y)[..., None]
+    return R._srgb_gamma(np.clip(rgb_lin * scale, 0, 1))
+
+
+# 三个 panel 各自独立的 (exposure, floor)——时间上全局定死, 不随帧变(保留演变),
+# 但每panel独立(地球不被月球曝光带着走→解决"地球太亮")。
+MOON_EXPOSURE, MOON_FLOOR = 5.0, 0.03      # 月球: 血月暗部有层次, 正常月光亮, floor保底可见
+EARTH_EXPOSURE, EARTH_FLOOR = 2.5, 0.0     # 地球全景: 夜面灯光可见不抢戏, 环/太阳亮
+CLOSE_EXPOSURE, CLOSE_FLOOR = 2.5, 0.0     # 地球特写: 环颜色梯度
+
+# (旧的全局 gamma 月面曝光, render_textured 仍用)
 DYN_GAMMA = 0.35
 _Y_NORMAL = 1.0 * 0.6              # 正常月光×中性反照率(albn≈0.5-0.6)
 MOON_E = R._srgb_inv_gamma(0.75) / (_Y_NORMAL ** DYN_GAMMA)
@@ -79,21 +96,18 @@ def render_moon_panel(D, hdr=False, mark=True):
     # 反照率归一用**全月面**全局百分位(MOON_ALB_LO/HI)，不随帧/月盘位置变——
     # 否则每帧采到不同经度月面、反照率分布不同会让月盘平均亮度跳变。
     albn = np.clip((albY-MOON_ALB_LO)/max(MOON_ALB_HI-MOON_ALB_LO,1e-6)*0.5+0.5, 0.2, 1.2)
-    limb = np.power(np.clip(z,0,1), 0.5)
+    # 月球接近朗伯体, limb darkening 很弱(不像太阳那么强)。用 z^0.15 让满月较均匀,
+    # 避免"出本影后右半边因边缘变暗显得不均匀"(用户反馈)。
+    limb = np.power(np.clip(z,0,1), 0.15)
     # HDR 线性场景值(物理真实, 含全动态范围): 食光 × 反照率 × limb, 未压缩未tone-map。
     # 这是后期 HDR 处理的最大信息量来源(血月最深~6e-5 到 正常月光~1, 1.5万倍真实范围)。
     XYZ_hdr = XYZ * (albn*limb)[...,None]
     rgb_hdr = np.clip(R._xyz_to_srgb_linear(XYZ_hdr), 0, None) * inside[...,None]
     if hdr:
         return _box(rgb_hdr, SSAA)
-    # 显示版(8-bit预览): 动态范围压缩(全局固定 gamma) + 固定曝光 + tone-map。
-    Yp = np.maximum(XYZ[...,1], 1e-30)
-    chroma_xyz = XYZ / Yp[...,None]
-    Y_comp = np.power(Yp, DYN_GAMMA)
-    XYZ_comp = chroma_xyz * Y_comp[...,None]
-    XYZ_scene = XYZ_comp * (albn*limb)[...,None]
-    rgb = R._srgb_gamma(np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZ_scene, MOON_E)),0,1))
-    rgb = rgb*inside[...,None]
+    # 显示版: 月球独立 tone map(暗部floor保底+亮部Reinhard, 时间上全局定死)。
+    rgb = _panel_tonemap(rgb_hdr, MOON_EXPOSURE, MOON_FLOOR)
+    rgb = rgb * inside[..., None]
     out = _box(rgb, SSAA)
     if mark:
         # 观测点 marker: 我们站在月盘中心看地球。标个小三角(尖朝上)在月心。
@@ -108,11 +122,14 @@ def render_moon_panel(D, hdr=False, mark=True):
 
 def render_earth_full_panel(D, hdr=False, mark=True):
     """中panel：地球全景(整个地球盘+细大气环+太阳)，底部标三角=右栏特写看的位置。"""
-    rgb = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
+    lin = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
                                 ring_tables=RING_T, fov=None,   # 看整个地球
                                 center=None, sun_dir_deg=180.0,
-                                return_linear=hdr, draw_sun=True)   # 全景画太阳(钻石环)
-    out = rgb if hdr else rgb.astype(float)/255.0
+                                return_linear=True, draw_sun=True)   # 全景画太阳(钻石环)
+    if hdr:
+        return lin
+    # 地球全景独立 tone map(不被月球曝光带着走→不过亮)
+    out = _panel_tonemap(lin, EARTH_EXPOSURE, EARTH_FLOOR)
     if mark and not hdr:
         # 在地球**左缘**(太阳露出侧/特写取景处)画一个小方框，指出右栏特写看的是这段环。
         H, W = out.shape[:2]
@@ -136,19 +153,20 @@ def render_earth_panel(D, hdr=False):
     # 特写不标方向(只看颜色梯度), 故构图旋成水平地平线最好看: 看底部弧、太阳从底部侧(亮侧)、
     # 不画太阳。与全景(左缘+太阳)方向不一致无妨——特写是"放大看这段环的颜色", 非方位图。
     ring_mid = RE.ANG_EARTH * (1.0 + RE.RING_FRAC * 0.5)
-    rgb = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
+    lin = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
                                 ring_tables=RING_T, fov=3.0,
                                 center=(0.0, -ring_mid), sun_dir_deg=-90.0,
-                                return_linear=hdr, draw_sun=False)
-    out = rgb if hdr else rgb.astype(float)/255.0
+                                return_linear=True, draw_sun=False)
+    out = lin if hdr else _panel_tonemap(lin, CLOSE_EXPOSURE, CLOSE_FLOOR)  # 特写独立tone map
     # 上下翻转成自然地平线观感: 天空在上、地球在下(像站地面看日出地平线)。
     return out[::-1]
 
 
-# 正常月光的参考亮度(nits)。地球环/太阳是高光(>这个值, 在HDR里超亮)。
-HDR_WHITE_NITS = 300.0
-# HDR 用 less aggressive 压缩(比SDR的DYN_GAMMA=0.35柔和), 暗面提亮但保更多高动态。
-HDR_GAMMA = 0.55
+# HDR 亮度映射(重设计): nits = HDR_BLACK_NITS + Y^HDR_GAMMA × HDR_WHITE_NITS。
+# 血月暗(Y~1e-3)抬到~HDR_BLACK_NITS可见; 正常月光(Y=1)→~WHITE; 环/太阳(Y=5)→超亮不封顶。
+HDR_BLACK_NITS = 1.5      # 暗部抬升基底(nits), 让血月暗部在HDR里可见
+HDR_WHITE_NITS = 120.0    # 正常月光参考白(nits)
+HDR_GAMMA = 0.45          # 暗部提升强度(越小暗部越亮); 不压高光(高光靠Y^g后乘WHITE仍超WHITE)
 
 
 def _pq_encode(linear_nits):
@@ -169,17 +187,39 @@ def _render_hdr_frame(args):
     # (1) 线性 TIFF: 固定 scale 保留相对HDR(正常月光1.0→16000, 留headroom)。
     f16_lin = np.clip(frame * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
-    # (2) PQ 编码给视频: 线性场景值→nits→PQ。HDR less aggressive 压缩(暗面提亮+保亮度增量):
-    # 全局固定 gamma 压亮度(Y^g, g=0.55), 不做 per-pixel 归一(否则抹掉亮度随D的增量)。
-    # 色相保持: 用亮度Y的压缩比缩放RGB。
-    Yl = np.maximum(0.2126*frame[...,0]+0.7152*frame[...,1]+0.0722*frame[...,2], 1e-9)
-    scale = np.power(Yl, HDR_GAMMA) / Yl              # 全局固定压缩比(不per-pixel归一)
-    frame_c = frame * scale[..., None]
-    nits = frame_c * HDR_WHITE_NITS
+    # (2) HDR PQ 编码——重设计: 物理线性亮度 → nits 的**固定**映射, 不压gamma。
+    # 设计目标: 暗部(血月)可见 + 亮部(大气环/太阳)不封顶。
+    #   线性 Y → nits = HDR_BLACK_NITS + Y^HDR_GAMMA × HDR_WHITE_NITS
+    #   血月暗(Y~1e-3): 抬到 ~HDR_BLACK_NITS(几nits, PQ暗端精度足够看见)。
+    #   正常月光(Y=1): ~HDR_WHITE_NITS(参考白)。
+    #   大气环/太阳(Y=5): 远超白点→500+nits 超亮不封顶(PQ高端不clip, 因为<10000)。
+    # 固定映射(不per-pixel/per-frame归一), 保留亮度随D的真实增量。
+    Yl = np.maximum(0.2126*frame[...,0]+0.7152*frame[...,1]+0.0722*frame[...,2], 1e-12)
+    nits_Y = HDR_BLACK_NITS + np.power(Yl, HDR_GAMMA) * HDR_WHITE_NITS
+    scale = (nits_Y / Yl)[..., None]                  # 保色相: 按亮度映射比缩放RGB
+    nits = frame * scale
     pq = _pq_encode(nits)
     pq16 = (np.clip(pq, 0, 1) * 65535 + 0.5).astype(np.uint16)
+    # 角分文字: 8bit渲染文字蒙版, 叠到PQ帧(PIL不支持16bit RGB绘字, 故用蒙版)。
+    txt = _angle_text_mask(D, pq16.shape[:2])
+    pq16[txt] = 52000                                  # 文字处置亮白(PQ码值)
     tifffile.imwrite(os.path.join(HDRDIR, f"pq{i:04d}.tif"), pq16)
     return i
+
+
+_TXT_FONT = None
+def _angle_text_mask(D, shape):
+    """返回角分文字的布尔蒙版(在8bit灰度图上渲染文字再阈值化)。"""
+    global _TXT_FONT
+    from PIL import ImageDraw, ImageFont
+    if _TXT_FONT is None:
+        try:
+            _TXT_FONT = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 22)
+        except Exception:
+            _TXT_FONT = ImageFont.load_default()
+    g = Image.new("L", (shape[1], shape[0]), 0)
+    ImageDraw.Draw(g).text((14, 10), f"月心距本影中心 D = {D:.1f}'", fill=255, font=_TXT_FONT)
+    return np.asarray(g) > 128
 
 
 def _add_hdr_markers(frame):

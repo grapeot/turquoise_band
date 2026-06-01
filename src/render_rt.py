@@ -28,7 +28,7 @@ from render import (_tone_map_on_Y, _xyz_to_srgb_linear, _srgb_gamma, _srgb_inv_
 # ============================================================
 # 1. 一次性物理表：h → 两个 limb 的 (角距, XYZ, 聚焦)
 # ============================================================
-def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
+def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401, use_focus=True):
     """在密 h 网格上算两个 limb 的物理量，切出单调上升分支。
 
     两个 limb 走同一条切向视线物理（同 h 同 τ 同出射谱），差别只在几何落点与聚焦，
@@ -50,8 +50,13 @@ def build_branch_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
     i_min = int(np.argmin(a))                # 角距极小值 → 分支分界
     sl = slice(i_min, None)                  # 取极小值以上的单调上升支
     a_mono, h_mono = a[sl], h[sl]
-    foc = g.focusing_factor(h)
-    foc = foc / foc.max()
+    # 聚焦因子(红核中心会聚增亮)。视频里关掉(use_focus=False)以免月盘出现随D左移的亮斑；
+    # 绿松石带物理研究仍用(默认True)。
+    if use_focus:
+        foc = g.focusing_factor(h)
+        foc = foc / foc.max()
+    else:
+        foc = np.ones_like(h)
     # 半影/本影外 = 正常月光(直射日光,亮)。必须≈LUT边缘亮度(趋白区~1)以连续——
     # 否则月盘移出本影、右缘超出LUT范围后会从亮(0.99)突降到暗(造成"月面向右变暗"bug)。
     # 整体暗调由全局 tone-map(DYN_GAMMA)统一处理, 不靠把本影外调暗。
