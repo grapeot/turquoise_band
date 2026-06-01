@@ -17,31 +17,46 @@ import solar
 import geometry
 
 
-def transmission_matrix(h_tangent_km, lam_nm):
-    """返回透射率矩阵 T，形状 (len(h), len(lam))。
+def transmission_matrix(h_tangent_km, lam_nm, rayleigh=True, ozone=True, gray=False):
+    """返回透射率矩阵 T，形状 (len(h), len(lam))。T[i,j] = exp(-τ(lam_j, h_i))。
 
-    T[i,j] = exp(-τ(lam_j, h_i))。
+    ablation 开关(默认全开=现状物理):
+      rayleigh: 瑞利散射消光 on/off
+      ozone:    臭氧 Chappuis 吸收 on/off
+      gray:     灰消光模式——把瑞利+臭氧换成不分波长的灰消光(同总光学厚度均摊到所有λ),
+                用于"消光但无颜色选择"的教学态(本影内变灰而非变红/青)。
     """
     h_arr = np.atleast_1d(np.asarray(h_tangent_km, dtype=float))
     lam = np.asarray(lam_nm, dtype=float)
 
-    sig_ray = cross_sections.sigma_rayleigh(lam)   # (L,)
-    sig_o3 = cross_sections.sigma_o3(lam)          # (L,)
+    sig_ray = cross_sections.sigma_rayleigh(lam) if rayleigh else np.zeros_like(lam)
+    sig_o3 = cross_sections.sigma_o3(lam) if ozone else np.zeros_like(lam)
 
     # 每个擦边高度的柱密度（对视线对称积分）
     N_air = np.array([geometry.column_density(h, atmosphere.n_air) for h in h_arr])  # (H,)
     N_o3 = np.array([geometry.column_density(h, atmosphere.n_o3) for h in h_arr])    # (H,)
 
-    # τ = 外积：(H,1)*(1,L)
     tau = np.outer(N_air, sig_ray) + np.outer(N_o3, sig_o3)  # (H, L)
+    if gray:
+        # 灰消光: 用各h的波长平均光学厚度替换, 消去颜色选择(消光但无色相)
+        tau = np.tile(tau.mean(axis=1, keepdims=True), (1, len(lam)))
     return np.exp(-tau)
 
 
-def emergent_spectrum(h_tangent_km, lam_nm):
-    """出射谱 I(λ,h) = I_sun(λ) · T(λ,h)，形状 (H, L)。"""
+def emergent_spectrum(h_tangent_km, lam_nm, rayleigh=True, ozone=True, gray=False,
+                      solar_mode="real"):
+    """出射谱 I(λ,h) = I_sun(λ) · T(λ,h)，形状 (H, L)。
+
+    ablation 开关(默认=现状物理): rayleigh/ozone/gray 见 transmission_matrix;
+    solar_mode: "real"(实测/默认) 或 "blackbody"(5772K 黑体, 去太阳谱细结构的对照)。
+    """
     lam = np.asarray(lam_nm, dtype=float)
-    T = transmission_matrix(h_tangent_km, lam)
-    I_sun = solar.solar_spectrum(lam)  # (L,)
+    T = transmission_matrix(h_tangent_km, lam, rayleigh=rayleigh, ozone=ozone, gray=gray)
+    if solar_mode == "blackbody":
+        I_sun = solar.blackbody_spectrum(lam) if hasattr(solar, "blackbody_spectrum") \
+            else solar.solar_spectrum(lam)
+    else:
+        I_sun = solar.solar_spectrum(lam)
     return I_sun[None, :] * T
 
 

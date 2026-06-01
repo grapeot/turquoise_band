@@ -69,7 +69,7 @@ def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
 # ----------------------------------------------------------------------------
 # [月球 panel] 接近线性保大对比(右出本影亮/左深本影血月暗), 暗部仍有层次
 MOON_GAIN,  MOON_GAMMA,  MOON_TGT  = 1.0,  0.80, 0.78
-MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.8, 200.0   # 血月floor低(橙色不过亮), 正常月光200
+MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.1, 200.0   # 血月floor 0.8→0.1(深本影回物理真实~0.3nit不过亮), 满月200够亮
 # [地球全景 panel] 夜面暗于环(夜面亮度见 render_earth 夜面系数), 钻石环/太阳冲白
 FULL_GAIN,  FULL_GAMMA,  FULL_TGT  = 1.0,  0.80, 0.72   # g0.55→0.80: 接近线性保环方位variance(太阳侧亮/背侧暗, 修"差不多亮")
 FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE = 1.0, 0.0, 200.0   # 钻石环已超亮(~2000nits)

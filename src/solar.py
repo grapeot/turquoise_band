@@ -39,6 +39,11 @@ def solar_spectrum(lam_nm):
     return _solar_interp(np.asarray(lam_nm, float)) if _solar_interp is not None else planck(lam_nm)
 
 
+def blackbody_spectrum(lam_nm):
+    """5772K 黑体谱(ablation 用: 去太阳谱细结构, 看实测谱对绿松石带的贡献)。"""
+    return planck(lam_nm)
+
+
 # 模块导入时自动加载实测谱；失败则保留黑体
 try:
     load_solar_spectrum()
