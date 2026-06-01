@@ -31,7 +31,9 @@ Rm = R.R_MOON_ARCMIN
 # 让该步青带都落2/3, 差别只剩颜色本身。无青带步(1-3)用步4(臭氧点源)的d对齐, 月盘几何位置一致。
 # (各 a_blue 由物理算得: 点源臭氧52.6', 圆盘40.4'; d = a_blue - Rm/3, Rm/3≈5.2')
 D_POINT_BLUE = 47.4    # 步1-4: 点源青带@52.6→2/3
-D_DISK_BLUE = 35.2     # 步5-6: 圆盘青带@40.4→2/3
+D_DISK_BLUE = 35.2     # 步5: 圆盘青带@40.4→2/3
+D_RAYTRACE_BLUE = 36.0 # 步6: 真ray tracing青带@41→2/3
+_RT_ABLATION_LUT = None
 
 
 def _build_lut_pointsource(**kw):
@@ -94,9 +96,9 @@ STEPS = [
     dict(key="5_disk",    title="⑤ + 太阳圆盘（有限元）",
          note="太阳不是点：16′圆盘比青带还宽5倍，把浓青糊成浅青软边——真实没那么浓",
          mode="disk", n_disp=1, d=D_DISK_BLUE),
-    dict(key="6_full",    title="⑥ + 实测太阳谱 + 折射色散",
-         note="最后两个二阶修正：实测太阳谱微调色相、大气色散让边缘更柔——最终真实效果",
-         mode="disk", n_disp=16, d=D_DISK_BLUE),
+    dict(key="6_raytrace", title="⑥ 完整真·光线追踪（零近似）",
+         note="抛弃所有解析近似：真折射弯曲+弯曲路径消光+撒光线，focusing/本影暗度自然涌现——这才是真实",
+         mode="raytrace", d=D_RAYTRACE_BLUE),
 ]
 
 
@@ -142,6 +144,14 @@ def render_step(step, size=1200, ssaa=2):
     elif mode == "disk":
         lut = _build_lut_disk(n_disp=step.get("n_disp", 1))
         XYZ_phys = _shade_lut(a, lut)
+    elif mode == "raytrace":
+        # 完整真·正向 ray tracing(零 artificial: 真折射RK4+弯曲消光+撒线, focusing/本影暗度自然涌现)
+        import raytrace_eclipse as rte
+        global _RT_ABLATION_LUT
+        if "_RT_ABLATION_LUT" not in globals() or _RT_ABLATION_LUT is None:
+            _RT_ABLATION_LUT = rte.build_lut_from_raytrace(
+                n_rays_b=4_000_000, n_sun=2000, n_h_nodes=500, n_pix=300, n_disp=12)
+        XYZ_phys = _shade_lut(a, _RT_ABLATION_LUT)
 
     # 反照率 × 食光 × limb → 线性场景 XYZ
     XYZ_scene = XYZ_phys * (alb / 0.12 * limb)[..., None]
@@ -155,24 +165,26 @@ def render_step(step, size=1200, ssaa=2):
     return R._box_downsample(rgb_nits, ssaa).astype(np.float32)
 
 
-# 全局定标(所有6张共用→tone mapping globally consistent, 跨图可比)。
-# 全局峰值~236nit(满月白盘), 定标到满量程让最亮像素撑满16bit、不溢出。
-ABLATION_NITS_FULL = 240.0    # 6张共用: 240nit → 65535(满量程)
-
-
 def save_tiff16(rgb_nits, path):
-    """存 16-bit 线性 TIFF。全局固定定标(ABLATION_NITS_FULL→满量程), 6张可比, linear。
-    最亮像素(满月白~236nit)接近撑满65535; 修图软件里线性、跨图对比有意义。
+    """存 16-bit 线性 TIFF, **每步独立撑满 65535 动态范围**(峰值→满量程)。
+
+    用户洞察: 每步独立定标→暗的问题不存在。步6(真ray tracing本影-13档暗)自己的动态范围
+    (本影→出本影)铺满整个16bit, 本影层次全出来, 剪辑软件里满量程可调。
+    linear, 各步独立(不是全局可比——可比性交给剪辑软件统一)。返回该步的定标峰值(供preview同口径)。
     """
     import tifffile
-    arr16 = np.clip(rgb_nits / ABLATION_NITS_FULL * 65535.0, 0, 65535).astype(np.uint16)
+    peak = float(np.percentile(rgb_nits[rgb_nits > 0], 99.9)) if (rgb_nits > 0).any() else 1.0
+    arr16 = np.clip(rgb_nits / peak * 65535.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(path, arr16)
+    return peak
 
 
-def save_preview_png(rgb_nits, path):
-    """存 8bit PNG 预览(同全局定标+gamma压到可视, 仅供肉眼检查, 不是交付物)。"""
+def save_preview_png(rgb_nits, path, peak=None):
+    """存 8bit PNG 预览(每步独立峰值+gamma压到可视, 仅供肉眼检查, 不是交付物)。"""
     from PIL import Image
-    prev = np.clip(rgb_nits / ABLATION_NITS_FULL, 0, 1) ** (1/2.2)
+    p = peak if peak is not None else (np.percentile(rgb_nits[rgb_nits > 0], 99.9)
+                                       if (rgb_nits > 0).any() else 1.0)
+    prev = np.clip(rgb_nits / p, 0, 1) ** (1/2.2)
     Image.fromarray((prev * 255).astype(np.uint8)).save(path)
 
 
@@ -186,8 +198,8 @@ if __name__ == "__main__":
     os.makedirs(abldir, exist_ok=True)
     for step in STEPS:
         rgb = render_step(step, size=args.size, ssaa=args.ssaa)
-        save_tiff16(rgb, os.path.join(abldir, f"step_{step['key']}.tif"))
-        save_preview_png(rgb, os.path.join(abldir, f"step_{step['key']}_preview.png"))
-        print(f"  saved step_{step['key']}.tif (16bit线性nits) + preview")
-    print("ablation 6步 16bit线性TIFF渲染完成(HDR nits tone map, 绿松石带normalize到2/3)")
-    print(f"交付: {abldir}/step_*.tif — 剪辑软件里调色相/对比(全局定标 {ABLATION_NITS_FULL}nit→满量程, 6张可比)")
+        peak = save_tiff16(rgb, os.path.join(abldir, f"step_{step['key']}.tif"))
+        save_preview_png(rgb, os.path.join(abldir, f"step_{step['key']}_preview.png"), peak=peak)
+        print(f"  saved step_{step['key']}.tif (16bit线性, 独立撑满65535, 峰值{peak:.1f}nit)")
+    print("ablation 6步渲染完成: 前5步普通物理+第6步真ray tracing(零近似高潮), 绿松石带normalize到2/3")
+    print(f"交付: {abldir}/step_*.tif — 16bit线性, **每步独立撑满65535**(暗的问题不存在), 剪辑软件里调")
