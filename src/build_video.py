@@ -165,18 +165,40 @@ def _render_hdr_frame(args):
     import tifffile
     i, D = args
     frame = _assemble(D, hdr=True).astype(np.float32)   # 线性场景值(正常月光≈1, 地球环/太阳>1)
+    _add_hdr_markers(frame)                             # HDR也要月面观测点+全景框(线性亮值)
     # (1) 线性 TIFF: 固定 scale 保留相对HDR(正常月光1.0→16000, 留headroom)。
     f16_lin = np.clip(frame * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
-    # (2) PQ 编码给视频: 线性场景值→nits→PQ。HDR 用 less aggressive 压缩(暗面提亮但保高动态):
-    # 对亮度做温和 gamma(HDR_GAMMA, 比SDR的0.35柔和), 血月暗面不至于死黑, 高光仍超亮。
-    Yp = np.maximum(frame.max(axis=-1, keepdims=True), 1e-9)
-    frame_c = frame / Yp * np.power(Yp, HDR_GAMMA)   # 压亮度保色相
+    # (2) PQ 编码给视频: 线性场景值→nits→PQ。HDR less aggressive 压缩(暗面提亮+保亮度增量):
+    # 全局固定 gamma 压亮度(Y^g, g=0.55), 不做 per-pixel 归一(否则抹掉亮度随D的增量)。
+    # 色相保持: 用亮度Y的压缩比缩放RGB。
+    Yl = np.maximum(0.2126*frame[...,0]+0.7152*frame[...,1]+0.0722*frame[...,2], 1e-9)
+    scale = np.power(Yl, HDR_GAMMA) / Yl              # 全局固定压缩比(不per-pixel归一)
+    frame_c = frame * scale[..., None]
     nits = frame_c * HDR_WHITE_NITS
     pq = _pq_encode(nits)
     pq16 = (np.clip(pq, 0, 1) * 65535 + 0.5).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"pq{i:04d}.tif"), pq16)
     return i
+
+
+def _add_hdr_markers(frame):
+    """在三栏HDR线性帧上加月面观测点三角+全景特写框(线性亮值,过PQ后可见)。"""
+    H, W3 = frame.shape[:2]
+    pw = (W3 - 12) // 3                                # 每栏宽(含gap)
+    # 月面panel(第1栏)中心: 观测点三角(青)
+    cyp = H // 2; cxp = pw // 2
+    for dy in range(8):
+        half = 8 - dy
+        frame[max(0,cyp-8+dy), max(0,cxp-half):cxp+half] = [0.0, 2.0, 2.0]
+    # 全景panel(第2栏)左缘: 特写框(黄)
+    px0 = pw + 6
+    cxp2 = px0 + int((-RE.ANG_EARTH + RE.ANG_EARTH*1.15) / (2*RE.ANG_EARTH*1.15) * pw)
+    bs = 22
+    for t in range(-bs, bs+1):
+        for e in [-bs, bs]:
+            frame[np.clip(cyp+e,0,H-1), np.clip(cxp2+t,0,W3-1)] = [2.0, 2.0, 0.0]
+            frame[np.clip(cyp+t,0,H-1), np.clip(cxp2+e,0,W3-1)] = [2.0, 2.0, 0.0]
 
 
 def _draw_angle(rgb8, D):
