@@ -58,11 +58,23 @@ def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
     return R._srgb_gamma(np.clip(rgb_lin * scale, 0, 1))
 
 
-# 三个 panel 各自独立的 (gamma, target)——无floor, 时间全局定死, 每panel独立。
-# gamma 越小暗部越亮; target=正常亮度(Y=1=knee)映到的显示值, 留(1-target)余量给高光冲白。
-MOON_GAMMA, MOON_TGT = 0.80, 0.78      # 月球: 接近线性保大对比(右出本影亮/左深本影血月暗), 暗部仍有层次
-EARTH_GAMMA, EARTH_TGT = 0.55, 0.72    # 地球全景: 夜面暗于环, 环/太阳能冲白
-CLOSE_GAMMA, CLOSE_TGT = 0.62, 0.70    # 地球特写: 环颜色梯度保留, 高光bloom到白
+# ============================================================================
+# 三个 panel 的 tone map 完全解耦：每个 panel 一套独立参数(SDR gain/gamma/target,
+# HDR exp/black/white), 互不引用。调任一 panel 不影响另外两个。
+# SDR _panel_tonemap: gamma 越小暗部越亮; target=正常亮度(Y=knee)映到的显示值,
+#   留(1-target)余量给高光冲白; gain=tone map前线性曝光增益。
+# HDR _panel_to_nits:  nits = black + exp·Y·white。black=暗部floor, white=正常亮度对应nits。
+# ----------------------------------------------------------------------------
+# [月球 panel] 接近线性保大对比(右出本影亮/左深本影血月暗), 暗部仍有层次
+MOON_GAIN,  MOON_GAMMA,  MOON_TGT  = 1.0,  0.80, 0.78
+MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.8, 200.0   # 血月floor低(橙色不过亮), 正常月光200
+# [地球全景 panel] 夜面暗于环(夜面亮度见 render_earth 夜面系数), 钻石环/太阳冲白
+FULL_GAIN,  FULL_GAMMA,  FULL_TGT  = 1.0,  0.55, 0.72
+FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE = 1.0, 0.0, 200.0   # 钻石环已超亮(~2000nits)
+# [大气特写 panel] 环颜色梯度+高光bloom到白; HDR后期更亮(闪光感)
+CLOSE_GAIN, CLOSE_GAMMA, CLOSE_TGT = 1.2,  0.62, 0.70
+CLOSE_HDR_EXP, CLOSE_HDR_BLACK, CLOSE_HDR_WHITE = 1.0, 0.0, 420.0
+# ============================================================================
 
 # (旧的全局 gamma 月面曝光, render_textured 仍用)
 DYN_GAMMA = 0.35
@@ -108,8 +120,8 @@ def render_moon_panel(D, hdr=False, mark=True):
     rgb_hdr = np.clip(R._xyz_to_srgb_linear(XYZ_hdr), 0, None) * inside[...,None]
     if hdr:
         return _box(rgb_hdr, SSAA)
-    # 显示版: 月球独立 tone map(暗部floor保底+亮部Reinhard, 时间上全局定死)。
-    rgb = _panel_tonemap(rgb_hdr, MOON_GAMMA, MOON_TGT)
+    # 显示版: 月球独立 tone map(参数完全独立, 不与地球两panel共享)。
+    rgb = _panel_tonemap(rgb_hdr * MOON_GAIN, MOON_GAMMA, MOON_TGT)
     rgb = rgb * inside[..., None]
     out = _box(rgb, SSAA)
     if mark:
@@ -131,8 +143,8 @@ def render_earth_full_panel(D, hdr=False, mark=True):
                                 return_linear=True, draw_sun=True)   # 全景画太阳(钻石环)
     if hdr:
         return lin
-    # 地球全景独立 tone map(不被月球曝光带着走→不过亮)
-    out = _panel_tonemap(lin, EARTH_GAMMA, EARTH_TGT)
+    # 地球全景独立 tone map(不被月球曝光带着走→不过亮); 再加亮一半
+    out = _panel_tonemap(lin * FULL_GAIN, FULL_GAMMA, FULL_TGT)
     if mark and not hdr:
         # 在地球**左缘**(太阳露出侧/特写取景处)画一个小方框，指出右栏特写看的是这段环。
         H, W = out.shape[:2]
@@ -159,14 +171,8 @@ def render_earth_panel(D, hdr=False):
                                 ring_tables=RING_T, fov=3.0,
                                 center=(0.0, -ring_mid), sun_dir_deg=-90.0,
                                 return_linear=True, draw_sun=False)
-    out = lin if hdr else _panel_tonemap(lin, CLOSE_GAMMA, CLOSE_TGT)
+    out = lin if hdr else _panel_tonemap(lin * CLOSE_GAIN, CLOSE_GAMMA, CLOSE_TGT)  # 特写独立参数
     return out[::-1]   # 上下翻转: 天空在上、地球在下(自然地平线)
-
-
-# HDR per-panel 独立映射(像SDR): 每panel线性Y → nits = black + exp·Y·white。
-# 暗部抬到black保底可见, 亮部线性不封顶(保亮度增量), 地球独立(不被月球带亮)。
-MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 8.0, 200.0   # 月球: 血月暗抬到8nits, 正常月光200
-EARTH_HDR_EXP, EARTH_HDR_WHITE = 1.0, 200.0                      # 地球: 夜面暗(无black), 环/太阳线性超亮
 
 
 def _pq_encode(linear_nits):
@@ -204,9 +210,9 @@ def _render_hdr_frame(args):
     f16_lin = np.clip(lin * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
     # (2) HDR视频: 每panel独立映射到nits(地球不被月球带亮、保各自亮度增量), 拼接后PQ。
-    moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)
-    full_n = _panel_to_nits(full, EARTH_HDR_EXP, 0.0, EARTH_HDR_WHITE)
-    close_n = _panel_to_nits(close, EARTH_HDR_EXP, 0.0, EARTH_HDR_WHITE)
+    moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)    # 月球独立
+    full_n = _panel_to_nits(full, FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE)    # 全景独立
+    close_n = _panel_to_nits(close, CLOSE_HDR_EXP, CLOSE_HDR_BLACK, CLOSE_HDR_WHITE)  # 特写独立
     nits = np.concatenate([moon_n, gap, full_n, gap, close_n], axis=1)
     _add_hdr_markers(nits, val=MOON_HDR_WHITE)         # marker用白点nits亮度
     pq = _pq_encode(nits)

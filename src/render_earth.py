@@ -178,7 +178,7 @@ def _sample_earth(tex, X, Y, disk, sun_dir_deg, D_arcmin):
     col = tex[ri, ci]
     # 夜面：日食时朝月球的是地球背光面。用 Black Marble 城市灯光图——城市亮点保留，
     # 海陆夜面极暗。灯光本身已是"暗背景+亮点"，乘一个适中系数即可（不压太狠，让灯光可见）。
-    out[disk] = np.clip(col[disk] * 0.045, 0, None)  # 夜面压暗(城市灯光仍可见,明显暗于折射环,不抢戏)
+    out[disk] = np.clip(col[disk] * 0.0225, 0, None) # 夜面压暗到原一半(地球本身更暗,环独立不受影响)
     return out
 
 
