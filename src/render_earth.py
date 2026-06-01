@@ -100,12 +100,14 @@ def render_earth_frame(D_arcmin, size=900, ssaa=2, expose_srgb=0.85,
     lx = ANG_EARTH * np.cos(phi); ly = ANG_EARTH * np.sin(phi)
     sx = D_arcmin * np.cos(sun_phi); sy = D_arcmin * np.sin(sun_phi)
     dist_to_sun = np.hypot(lx - sx, ly - sy)     # limb点到太阳中心角距
-    # 太阳是 16' 半径的盘。limb 外缘到太阳越近 → 该方位折射光越强。
-    # 用平滑钟形：dist≈ANG_EARTH(太阳贴着该 limb 外)时最亮，远离则暗。
-    #   D=0：太阳正中，所有 φ 的 dist 都≈ANG_EARTH → 全圈均匀(360°日落环)。
-    #   D 大：朝 sun_phi 那侧 dist 小(太阳贴近/露出)→亮；背侧 dist 大→暗。平滑无突跳。
-    soft = ANG_SUN * 2.5
-    bright = np.exp(-((dist_to_sun - ANG_EARTH) / soft) ** 2) * 0.7 + 0.05
+    # 该方位 limb 的折射光强 ∝ 太阳在该方位 limb **外侧的贴近程度**。
+    # 太阳贴近该 limb 点(dist_to_sun 小)→光从该方位强折射进来→亮。
+    #   D=0: 太阳正中, 各 φ 的 dist 都=ANG_EARTH(均匀)→ 全圈日落环。
+    #   D 大: 朝 sun_phi 那侧 dist 变小(太阳贴近该缘)→越来越亮; 背侧 dist 变大→暗。
+    #   单调: dist 越小越亮(用 1/(1+dist) 型), 太阳露出侧随 D 增持续变亮(修复:原公式峰值
+    #   错设在 dist=ANG_EARTH, 导致太阳贴近时反而变暗)。
+    soft = ANG_SUN * 3.0
+    bright = 0.05 + 0.9 * np.exp(-(dist_to_sun / soft) ** 2)
     # 钻石环：太阳边缘探出地球缘(D+ANG_SUN > ANG_EARTH)时，朝 sun_phi 那侧出现强光点
     sun_peek = D_arcmin + ANG_SUN - ANG_EARTH    # >0 即露出
     if sun_peek > 0:

@@ -41,25 +41,26 @@ EARTH_TEX = np.asarray(Image.open(_earth_p).convert("RGB"), float) / 255.0 if os
 R_MOON = R.R_MOON_ARCMIN
 R_UMBRA = R.R_UMBRA_ARCMIN
 
-def _panel_tonemap(rgb_lin, exposure, floor, white=1.0):
-    """每panel独立的SDR tone map(时间上全局定死,不per-frame)。
-    设计(用户方案): 暗部clip保底+亮部柔和压。
-      显示亮度 = floor + (1-floor)·Reinhard(E·Y/white) , 暗部至少抬到floor(可见)。
-      色相保持: 按亮度映射比缩放RGB。floor让最暗也>0可见; 亮部Reinhard软压不爆。
+def _panel_tonemap(rgb_lin, gamma, target):
+    """每panel独立的SDR tone map(无floor, 时间上全局定死, 不per-frame)。
+    旧版那套(对比好): 亮度幂律压缩 Y^gamma(收窄动态范围,保对比) + 对数高光肩部。
+    gamma 越小压得越狠(暗部越亮); target 是正常参考亮度映到的sRGB。
+    色相保持: 按亮度映射比缩放RGB。无floor→暗部自然暗, 保留spatial对比。
     """
     Y = np.maximum(0.2126*rgb_lin[...,0]+0.7152*rgb_lin[...,1]+0.0722*rgb_lin[...,2], 1e-12)
-    EY = exposure * Y / white
-    Yd = floor + (1.0 - floor) * (EY / (1.0 + EY))     # 暗部抬到floor, 亮部Reinhard软压
+    Yc = np.power(Y, gamma)                              # 幂律压缩动态范围(保对比)
+    E = R._srgb_inv_gamma(target) / (1.0 ** gamma)      # 曝光: 正常亮度(Y=1)映到target
+    EY = E * Yc
+    Yd = 0.92 * np.log2(1.0 + EY) / np.log2(1.0 + E)     # 对数肩部(亮部不死白)
     Yd = np.clip(Yd, 0, 1)
     scale = (Yd / Y)[..., None]
     return R._srgb_gamma(np.clip(rgb_lin * scale, 0, 1))
 
 
-# 三个 panel 各自独立的 (exposure, floor)——时间上全局定死, 不随帧变(保留演变),
-# 但每panel独立(地球不被月球曝光带着走→解决"地球太亮")。
-MOON_EXPOSURE, MOON_FLOOR = 5.0, 0.03      # 月球: 血月暗部有层次, 正常月光亮, floor保底可见
-EARTH_EXPOSURE, EARTH_FLOOR = 2.5, 0.0     # 地球全景: 夜面灯光可见不抢戏, 环/太阳亮
-CLOSE_EXPOSURE, CLOSE_FLOOR = 2.5, 0.0     # 地球特写: 环颜色梯度
+# 三个 panel 各自独立的 (gamma, target)——无floor, 时间全局定死, 每panel独立。
+MOON_GAMMA, MOON_TGT = 0.40, 0.80      # 月球: 血月暗部有层次保对比, 正常月光亮
+EARTH_GAMMA, EARTH_TGT = 0.55, 0.85    # 地球全景: 夜面暗(gamma压缩不抬太狠), 环/太阳亮
+CLOSE_GAMMA, CLOSE_TGT = 0.55, 0.85    # 地球特写: 环颜色梯度
 
 # (旧的全局 gamma 月面曝光, render_textured 仍用)
 DYN_GAMMA = 0.35
@@ -106,7 +107,7 @@ def render_moon_panel(D, hdr=False, mark=True):
     if hdr:
         return _box(rgb_hdr, SSAA)
     # 显示版: 月球独立 tone map(暗部floor保底+亮部Reinhard, 时间上全局定死)。
-    rgb = _panel_tonemap(rgb_hdr, MOON_EXPOSURE, MOON_FLOOR)
+    rgb = _panel_tonemap(rgb_hdr, MOON_GAMMA, MOON_TGT)
     rgb = rgb * inside[..., None]
     out = _box(rgb, SSAA)
     if mark:
@@ -129,7 +130,7 @@ def render_earth_full_panel(D, hdr=False, mark=True):
     if hdr:
         return lin
     # 地球全景独立 tone map(不被月球曝光带着走→不过亮)
-    out = _panel_tonemap(lin, EARTH_EXPOSURE, EARTH_FLOOR)
+    out = _panel_tonemap(lin, EARTH_GAMMA, EARTH_TGT)
     if mark and not hdr:
         # 在地球**左缘**(太阳露出侧/特写取景处)画一个小方框，指出右栏特写看的是这段环。
         H, W = out.shape[:2]
@@ -149,17 +150,15 @@ def render_earth_full_panel(D, hdr=False, mark=True):
 def render_earth_panel(D, hdr=False):
     """右panel：站月面中心看地球，长焦看亮侧(底部)那段大气环。
     hdr=True 返回线性HDR(地球环高动态)；否则8bit显示。"""
-    # 真实薄环(1.3%)→小fov长焦放大看清; 弧因只看地球缘极小一段而趋平(像ISS看地平线)。
-    # 特写不标方向(只看颜色梯度), 故构图旋成水平地平线最好看: 看底部弧、太阳从底部侧(亮侧)、
-    # 不画太阳。与全景(左缘+太阳)方向不一致无妨——特写是"放大看这段环的颜色", 非方位图。
+    # 特写看底部弧(水平地平线,干净)。太阳也朝底部(-90)让这段随D演变(太阳贴近→变亮)。
+    # 注: 全景太阳在左缘(物理对,配月亮右移); 特写是"放大看环颜色"非方位图, 用底部好看。
     ring_mid = RE.ANG_EARTH * (1.0 + RE.RING_FRAC * 0.5)
     lin = RE.render_earth_frame(D, size=PANEL, ssaa=SSAA, earth_tex=EARTH_TEX,
                                 ring_tables=RING_T, fov=3.0,
                                 center=(0.0, -ring_mid), sun_dir_deg=-90.0,
                                 return_linear=True, draw_sun=False)
-    out = lin if hdr else _panel_tonemap(lin, CLOSE_EXPOSURE, CLOSE_FLOOR)  # 特写独立tone map
-    # 上下翻转成自然地平线观感: 天空在上、地球在下(像站地面看日出地平线)。
-    return out[::-1]
+    out = lin if hdr else _panel_tonemap(lin, CLOSE_GAMMA, CLOSE_TGT)
+    return out[::-1]   # 上下翻转: 天空在上、地球在下(自然地平线)
 
 
 # HDR per-panel 独立映射(像SDR): 每panel线性Y → nits = black + exp·Y·white。
