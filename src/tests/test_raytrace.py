@@ -96,5 +96,27 @@ def test_turquoise_band_blue():
     assert rb[valid].min() < 0.85, f"绿松石带最蓝 R/B={rb[valid].min():.2f} 应 <0.85(青)"
 
 
+@pytest.mark.slow
+def test_direct_light_reaches_full_moon():
+    """半影区直射光渐入 → 出本影端平滑爬升到满月(~0档), 无折射光封顶的假跃变。"""
+    import raytrace_eclipse as rte
+    import geometry as g
+    r = rte.forward_trace(n_rays_b=2_000_000, n_sun=1000, n_h_nodes=300, n_pix=240,
+                          n_disp=6, grid_half_km=9000.0, h_direct_max=3000.0, verbose=False)
+    rc = np.array(r["r_cent"]); surf = np.array(r["surf_r"])
+    a = np.degrees(np.arctan(rc / g.D_MOON_KM)) * 60
+    v = np.isfinite(surf) & (surf > 0)
+    # 出本影区(a~65-72')应接近满月(>0.7, 即 >-0.5档)——直射光把它点亮到满月
+    out = v & (a > 65) & (a < 73)
+    assert out.any() and surf[out].max() > 0.7, \
+        f"出本影端最亮 surf={surf[out].max() if out.any() else 0:.2f} 应 >0.7(直射光到满月)"
+    # 半影区无假跃变: 相邻径向 bin 的档数变化应平滑(单步 <2 档, 不像旧 clamp 的 ~5 档硬跳)
+    pen = v & (a > 41) & (a < 70)
+    st = np.log2(np.clip(surf[pen], 1e-9, None))
+    if len(st) > 2:
+        assert np.max(np.abs(np.diff(st))) < 2.0, \
+            f"半影区相邻档数跳变 {np.max(np.abs(np.diff(st))):.1f} 应 <2(平滑, 无假跃变)"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
