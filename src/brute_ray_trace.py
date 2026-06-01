@@ -40,13 +40,25 @@ import color as col
 ARCMIN_PER_RAD = np.degrees(1.0) * 60.0
 
 
-def a_signed_arcmin(h_km):
+def _n_minus_1(lam_nm):
+    """干燥空气折射率 (n-1)，Edlén 1966 简化式。决定折射角的波长依赖(色散)。"""
+    sig2 = (1.0e3 / np.asarray(lam_nm, float)) ** 2
+    return (8342.54 + 2406147.0 / (130.0 - sig2) + 15998.0 / (38.9 - sig2)) * 1e-8
+
+
+def dispersion_scale(lam_nm, lam_ref=600.0):
+    """折射角随波长的缩放因子 α(λ)/α(ref) = (n(λ)-1)/(n(ref)-1)。
+    蓝光(n-1大)折射更强→落点更靠外, 像棱镜。ref=600nm(原消色差α0对应处)。"""
+    return _n_minus_1(lam_nm) / _n_minus_1(lam_ref)
+
+
+def a_signed_arcmin(h_km, disp_scale=1.0):
     """擦地高度 h → 轴上落点带符号角距(arcmin)。点源(轴上子点)版本。
 
     r_signed = (R⊕+h) − α(h)·d_moon ; a = arctan(r_signed/d_moon)。
     低 h 强折射 → r 负(落本影深处/红核, 过轴); 高 h 弱折射 → r 大(外缘绿松石带)。
     """
-    r_signed_km = (g.R_EARTH + h_km) - g.refraction_angle(h_km) * g.D_MOON_KM
+    r_signed_km = (g.R_EARTH + h_km) - g.refraction_angle(h_km) * disp_scale * g.D_MOON_KM
     return np.degrees(np.arctan(r_signed_km / g.D_MOON_KM)) * 60.0
 
 
@@ -64,6 +76,7 @@ def brute_trace(
     a_grid_lo=35.0,    # 统计范围(arcmin), 覆盖绿松石带 46-52'
     a_grid_hi=60.0,
     point_source=False,
+    n_disp=16,         # 折射色散波段数(蓝光折射更强→落点更靠外)。=1 关色散(ablation 用)
 ):
     """暴力撒线 + 落点分箱。返回各角距 bin 的 (a, R/B, Y, XYZ)。
 
@@ -76,21 +89,29 @@ def brute_trace(
     white_XYZ = col.spectrum_to_XYZ(lam, I_sun_full)
     k_white = 1.0 / white_XYZ[1]
 
-    # --- 预计算每个擦地高度 h 的出射谱 → XYZ(只依赖 h, 与 ξ 无关), 一次算好复用 ---
-    # 用一组密 h 节点算 XYZ, 再插到撒线的 h 上(辐射传输是 (H,L) 矩阵, 节点太多会爆内存)。
+    # --- 预计算每个擦地高度 h 的出射谱(H,L), 与 ξ 无关一次算好 ---
+    # 折射色散: 不同波段用不同折射缩放 → 不同落点。把谱按波长分 n_disp 段,
+    # 每段单独 trace 落点(用该段代表波长的色散缩放), 实现"蓝光落点更靠外"。
     n_h_phys = 4000
     h_nodes = np.linspace(h_min, h_max, n_h_phys)
-    I_emerg = rt.emergent_spectrum(h_nodes, lam)                      # (H,L)
-    XYZ_nodes = np.array([col.spectrum_to_XYZ(lam, I_emerg[i]) for i in range(n_h_phys)]) * k_white  # (H,3)
+    I_emerg = rt.emergent_spectrum(h_nodes, lam)                      # (H,L) 各h的出射谱
 
-    # --- 撒线: 在 impact parameter b=R⊕+h 上均匀(即 h 上均匀, db=dh)。每条线等权重(等通量) ---
+    # 波长分段: 每段一个色散缩放 + 该段对应的 XYZ(只积该段波长的 CMF)
+    band_edges = np.linspace(0, len(lam), n_disp + 1).astype(int)
+    bands = []
+    for bi in range(n_disp):
+        sl = slice(band_edges[bi], band_edges[bi + 1])
+        if sl.start >= sl.stop:
+            continue
+        lam_b = lam[sl]
+        lam_rep = float(lam_b.mean())
+        dsc = dispersion_scale(lam_rep) if n_disp > 1 else 1.0
+        # 该段的 XYZ(只积本段波长): 各h节点
+        XYZ_b = np.array([col.spectrum_to_XYZ(lam_b, I_emerg[i, sl]) for i in range(n_h_phys)]) * k_white
+        bands.append((dsc, XYZ_b))
+
+    # --- 撒线: impact parameter b=R⊕+h 均匀, 等权(等通量) ---
     h_rays = np.linspace(h_min, h_max, n_h)
-    a_axis = a_signed_arcmin(h_rays)                                  # (N,) 轴上落点角距
-
-    # 每条线的 XYZ(由其 h 在 XYZ_nodes 上插值)
-    XYZ_ray = np.empty((n_h, 3))
-    for c in range(3):
-        XYZ_ray[:, c] = np.interp(h_rays, h_nodes, XYZ_nodes[:, c])
 
     # --- 太阳圆盘径向子点 ξ + 弦长权重(均匀亮度盘的 1D 投影) ---
     ang_sun = ang_sun_arcmin()
@@ -114,17 +135,21 @@ def brute_trace(
     # 线通量 ∝ db(均匀)。所以每条线等权 1。focusing= 落点线密度比, 由分箱涌现。
     base_w = 1.0
 
-    for xi, wj in zip(xis, w_xi):
-        x_land = a_axis + xi                                         # (N,) 该子点的落点角距
-        # 落点 < 太阳圆盘几何本影内沿被地球挡? 不——这里 a_axis 已含折射, 任何落点都有光。
-        # 但落点超出 h_max 对应的最大角距(高空外, 光线不入大气)就是直射日光, 不属于本影研究区,
-        # 它们落点 a 很大(>57'), 自然落在 bin 范围外, 不影响绿松石带统计。
-        idx = np.floor((x_land - a_grid_lo) / bin_width).astype(int)
-        m = (idx >= 0) & (idx < nb)
-        ii = idx[m]
-        ww = wj * base_w
-        np.add.at(XYZ_bin, ii, XYZ_ray[m] * ww)
-        np.add.at(cnt_bin, ii, ww * np.ones(m.sum()))
+    # 每个色散波段: 用该段色散缩放算落点 a_axis, 把该段 XYZ 分箱。
+    # 蓝段 dsc>1 → 折射更强 → 落点更靠外(像棱镜把蓝光多弯一点)。色散从这里涌现。
+    for dsc, XYZ_b in bands:
+        a_axis = a_signed_arcmin(h_rays, disp_scale=dsc)             # (N,) 该波段落点
+        XYZ_ray = np.empty((n_h, 3))
+        for c in range(3):
+            XYZ_ray[:, c] = np.interp(h_rays, h_nodes, XYZ_b[:, c])
+        for xi, wj in zip(xis, w_xi):
+            x_land = a_axis + xi
+            idx = np.floor((x_land - a_grid_lo) / bin_width).astype(int)
+            m = (idx >= 0) & (idx < nb)
+            ii = idx[m]
+            ww = wj * base_w
+            np.add.at(XYZ_bin, ii, XYZ_ray[m] * ww)
+            np.add.at(cnt_bin, ii, ww * np.ones(m.sum()))
 
     # bin 的代表 XYZ = 累加值(已含落点密度 → focusing)。Y 直接当亮度。
     # R/B: 由 bin 累加的 XYZ → sRGB 线性 R,B 之比。

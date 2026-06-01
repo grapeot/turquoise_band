@@ -148,12 +148,17 @@ def build_disk_lut(n_h=300000, n_xi=257, bin_width=0.08, a_lo=18.0, a_hi=72.0):
     import brute_ray_trace as bt
     res = bt.brute_trace(n_h=n_h, n_xi=n_xi, bin_width=bin_width,
                          a_grid_lo=a_lo, a_grid_hi=a_hi)
-    a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"]
+    a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"].copy()
     yref = np.percentile(XYZ[Y > 0, 1], 99)
-    XYZ = XYZ / max(yref, 1e-9)
-    # 边缘外(a>a_hi 已无 bin): 趋白正常月光; 内侧(a<最内有效)→深本影渐黑由LUT自然给
-    return dict(a=a, XYZ=XYZ, a_lo=float(a[0]), a_hi=float(a[-1]),
-                white=XYZ[np.argmax(a[Y > 0])] if (Y > 0).any() else np.array([1.0, 1.0, 1.0]))
+    XYZ = XYZ / max(yref, 1e-9); Yn = XYZ[:, 1]
+
+    # 修边界外虚假衰减: 暴力撒线在大a端(本影外/半影外)落点密度不足→Y虚降(a=70只0.53),
+    # 但物理上 a>本影边界 = 直射正常月光(最亮~1, 不衰减)。亮度峰值位置≈本影边界,
+    # 峰值之后 clamp 到正常月光白(峰值处的XYZ), 消除"月盘右缘虚假阴影"(D=60末帧bug)。
+    i_peak = int(np.argmax(Yn))
+    white = XYZ[i_peak].copy()                          # 峰值处=趋白正常月光
+    XYZ[i_peak:] = white                                # 峰值外全部=正常月光白(不衰减)
+    return dict(a=a, XYZ=XYZ, a_lo=float(a[0]), a_hi=float(a[-1]), white=white)
 
 
 def shade_disk_lut(a_pixel, lut):

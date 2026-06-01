@@ -71,7 +71,7 @@ def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
 MOON_GAIN,  MOON_GAMMA,  MOON_TGT  = 1.0,  0.80, 0.78
 MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.8, 200.0   # 血月floor低(橙色不过亮), 正常月光200
 # [地球全景 panel] 夜面暗于环(夜面亮度见 render_earth 夜面系数), 钻石环/太阳冲白
-FULL_GAIN,  FULL_GAMMA,  FULL_TGT  = 1.0,  0.55, 0.72
+FULL_GAIN,  FULL_GAMMA,  FULL_TGT  = 1.0,  0.80, 0.72   # g0.55→0.80: 接近线性保环方位variance(太阳侧亮/背侧暗, 修"差不多亮")
 FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE = 1.0, 0.0, 200.0   # 钻石环已超亮(~2000nits)
 # [大气特写 panel] 环颜色梯度+高光bloom到白; HDR后期更亮(闪光感)
 CLOSE_GAIN, CLOSE_GAMMA, CLOSE_TGT = 1.2,  0.62, 0.70
