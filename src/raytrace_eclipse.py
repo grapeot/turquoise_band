@@ -111,6 +111,8 @@ def forward_trace(
     n_disp=12,
     trace_ds_km=0.25,       # RK4 弧长步长（α 在 ds=0.25 vs 0.02 一致到 0.01'，12× 提速）
     tau_steps=2000,         # 弯曲路径 τ 积分步数（curved_path 在 ≥1500 步收敛）
+    h_direct_max=2500.0,    # 直射光: impact b∈[R_e+h_max, R_e+h_direct_max]的光线在大气外, α=0、
+                            # 满谱不衰减(太阳探出地球缘的直射光)。覆盖半影区到满月。
     seed=0,
     verbose=True,
 ):
@@ -188,10 +190,15 @@ def forward_trace(
     cnt_grid = np.zeros((n_pix, n_pix))
 
     # ---- 满月归一：每条线携带通量 = Φ0·A_ring/n_rays（见模块 docstring）----
+    # 撒线范围扩到含直射光: b∈[R_e, R_e+h_direct_max]。b<R_e+h_max 擦大气(折射), b>R_e+h_max
+    # 在大气外(直射, α=0, 满谱不衰减)。半影区直射光渐入自然涌现, 平滑过渡到满月。
     PHI0 = 1.0
-    A_ring = np.pi * ((R_e + h_max) ** 2 - R_e ** 2)
+    b_outer = R_e + h_direct_max
+    A_ring = np.pi * (b_outer ** 2 - R_e ** 2)
     ray_flux = PHI0 * A_ring / n_rays_b
     full_moon_surface_brightness = 1.0
+    # 直射光的满谱 XYZ(不衰减白光, 各色散段一致——直射无色散位移)
+    white_XYZ_direct = white_XYZ * k_white   # Y=1 的满月白
 
     # B6 修复: blocked 用逐节点最近邻插值(不用单一标量阈值, 避免 blocked 区不连续时出错);
     # α 插值前把 blocked 节点用最近的 unblocked 边界 α 填充(不填 0, 避免紧邻 blocked 的
@@ -210,23 +217,27 @@ def forward_trace(
         m = min(chunk, n_rays_b - done)
         done += m
         U = rng.uniform(0.0, 1.0, size=m)
-        b_mag = np.sqrt(U * ((R_e + h_max) ** 2 - R_e ** 2) + R_e ** 2)
+        b_mag = np.sqrt(U * (b_outer ** 2 - R_e ** 2) + R_e ** 2)  # 扩到含直射光
         phi = rng.uniform(0.0, 2 * np.pi, size=m)
         bx = np.cos(phi); by = np.sin(phi)
         h = b_mag - R_e
+        direct = h > h_max          # 大气外: 直射光(α=0, 满谱不衰减)
 
-        # 真追踪 α(h)：对 blocked 的 h（h<擦地极限）置 nan → 该光线撞地，不落月面
-        alpha0 = np.interp(h, h_nodes, alpha_clean)          # 边界外推填充, 不被0拉低
-        unblocked = np.interp(h, h_nodes, blocked_f) < 0.5   # 逐节点blocked最近邻
+        # 折射光: 真追踪 α(h); blocked(h<擦地极限)→撞地不落月面。直射光 α=0、永不 blocked。
+        alpha0 = np.where(direct, 0.0, np.interp(h, h_nodes, alpha_clean))
+        unblocked = direct | (np.interp(h, h_nodes, blocked_f) < 0.5)
 
         si = rng.integers(0, n_sun, size=m)
         sdx = sun_dx[si]; sdy = sun_dy[si]
 
-        Yray = np.interp(h, h_nodes, Y_full_nodes)
+        # 亮度: 折射光查 Y_full_nodes(消光后); 直射光=满月白 Y=1(不衰减)
+        Yray = np.where(direct, white_XYZ_direct[1], np.interp(h, h_nodes, Y_full_nodes))
 
         # ---- 各色散波段：折射落点 + 累加 XYZ（颜色 + 色散涌现）----
-        for dsc, XYZ_b in bands:
-            alpha = alpha0 * dsc
+        # 直射光 α=0(不弯不色散), 各段平摊满谱白; 折射光走色散段。
+        npix2 = n_pix * n_pix
+        for bi, (dsc, XYZ_b) in enumerate(bands):
+            alpha = alpha0 * dsc                  # 直射 alpha0=0 → α=0
             r_land = b_mag - alpha * D_MOON
             x_land = bx * r_land + sdx
             y_land = by * r_land + sdy
@@ -234,11 +245,11 @@ def forward_trace(
             iy = np.floor((y_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
             inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
             flat = ix[inside] * n_pix + iy[inside]
-            hh = h[inside]
-            npix2 = n_pix * n_pix
+            hh = h[inside]; dir_in = direct[inside]
             for c in range(3):
+                # 折射光: 查该段消光后 XYZ; 直射光: 满谱白的该段份额(满谱/n_disp, 平摊到各段)
                 Xc = np.interp(hh, h_nodes, XYZ_b[:, c])
-                # bincount 散射加(替 np.add.at, 快得多)
+                Xc = np.where(dir_in, white_XYZ_direct[c] / len(bands), Xc)
                 XYZ_grid[:, :, c].reshape(-1)[:] += np.bincount(
                     flat, weights=Xc * ray_flux, minlength=npix2)
 
