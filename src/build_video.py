@@ -162,11 +162,10 @@ def render_earth_panel(D, hdr=False):
     return out[::-1]
 
 
-# HDR 亮度映射(重设计): nits = HDR_BLACK_NITS + Y^HDR_GAMMA × HDR_WHITE_NITS。
-# 血月暗(Y~1e-3)抬到~HDR_BLACK_NITS可见; 正常月光(Y=1)→~WHITE; 环/太阳(Y=5)→超亮不封顶。
-HDR_BLACK_NITS = 1.5      # 暗部抬升基底(nits), 让血月暗部在HDR里可见
-HDR_WHITE_NITS = 120.0    # 正常月光参考白(nits)
-HDR_GAMMA = 0.45          # 暗部提升强度(越小暗部越亮); 不压高光(高光靠Y^g后乘WHITE仍超WHITE)
+# HDR per-panel 独立映射(像SDR): 每panel线性Y → nits = black + exp·Y·white。
+# 暗部抬到black保底可见, 亮部线性不封顶(保亮度增量), 地球独立(不被月球带亮)。
+MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 8.0, 200.0   # 月球: 血月暗抬到8nits, 正常月光200
+EARTH_HDR_EXP, EARTH_HDR_WHITE = 1.0, 200.0                      # 地球: 夜面暗(无black), 环/太阳线性超亮
 
 
 def _pq_encode(linear_nits):
@@ -178,26 +177,37 @@ def _pq_encode(linear_nits):
     return np.power((c1 + c2 * Lm) / (1 + c3 * Lm), m2)
 
 
+def _panel_to_nits(rgb_lin, exposure, black_nits, white_nits):
+    """每panel独立: 线性场景值 → nits。暗部抬到black_nits保底可见, 亮部线性不封顶。
+      nits = black_nits + (exposure·Y) × white_nits   (Y已是线性, 不压gamma→保亮度增量)
+    暗部(Y小)抬到~black_nits; 正常(exposure·Y~1)→~white_nits; 亮部(Y大)线性超亮不封顶。
+    """
+    Y = np.maximum(0.2126*rgb_lin[...,0]+0.7152*rgb_lin[...,1]+0.0722*rgb_lin[...,2], 1e-12)
+    nits_Y = black_nits + exposure * Y * white_nits
+    scale = (nits_Y / Y)[..., None]
+    return rgb_lin * scale
+
+
 def _render_hdr_frame(args):
-    """渲一帧: (1)16bit线性TIFF(后期用) (2)16bit PQ-PNG(给HDR10视频)。三栏线性HDR。"""
+    """渲一帧 HDR: 三panel各自独立线性→nits映射(像SDR那样独立), 拼接后PQ编码。"""
     import tifffile
     i, D = args
-    frame = _assemble(D, hdr=True).astype(np.float32)   # 线性场景值(正常月光≈1, 地球环/太阳>1)
-    _add_hdr_markers(frame)                             # HDR也要月面观测点+全景框(线性亮值)
-    # (1) 线性 TIFF: 固定 scale 保留相对HDR(正常月光1.0→16000, 留headroom)。
-    f16_lin = np.clip(frame * 16000.0, 0, 65535).astype(np.uint16)
+    # 三panel各自线性HDR
+    moon = render_moon_panel(D, hdr=True)
+    full = render_earth_full_panel(D, hdr=True)
+    close = render_earth_panel(D, hdr=True)
+    gap = np.zeros((PANEL, 6, 3), np.float32)
+    # (1) 线性 TIFF(后期用): 拼接线性帧, 固定scale。
+    lin = np.concatenate([moon, gap, full, gap, close], axis=1).astype(np.float32)
+    _add_hdr_markers(lin)
+    f16_lin = np.clip(lin * 16000.0, 0, 65535).astype(np.uint16)
     tifffile.imwrite(os.path.join(HDRDIR, f"f{i:04d}.tif"), f16_lin)
-    # (2) HDR PQ 编码——重设计: 物理线性亮度 → nits 的**固定**映射, 不压gamma。
-    # 设计目标: 暗部(血月)可见 + 亮部(大气环/太阳)不封顶。
-    #   线性 Y → nits = HDR_BLACK_NITS + Y^HDR_GAMMA × HDR_WHITE_NITS
-    #   血月暗(Y~1e-3): 抬到 ~HDR_BLACK_NITS(几nits, PQ暗端精度足够看见)。
-    #   正常月光(Y=1): ~HDR_WHITE_NITS(参考白)。
-    #   大气环/太阳(Y=5): 远超白点→500+nits 超亮不封顶(PQ高端不clip, 因为<10000)。
-    # 固定映射(不per-pixel/per-frame归一), 保留亮度随D的真实增量。
-    Yl = np.maximum(0.2126*frame[...,0]+0.7152*frame[...,1]+0.0722*frame[...,2], 1e-12)
-    nits_Y = HDR_BLACK_NITS + np.power(Yl, HDR_GAMMA) * HDR_WHITE_NITS
-    scale = (nits_Y / Yl)[..., None]                  # 保色相: 按亮度映射比缩放RGB
-    nits = frame * scale
+    # (2) HDR视频: 每panel独立映射到nits(地球不被月球带亮、保各自亮度增量), 拼接后PQ。
+    moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)
+    full_n = _panel_to_nits(full, EARTH_HDR_EXP, 0.0, EARTH_HDR_WHITE)
+    close_n = _panel_to_nits(close, EARTH_HDR_EXP, 0.0, EARTH_HDR_WHITE)
+    nits = np.concatenate([moon_n, gap, full_n, gap, close_n], axis=1)
+    _add_hdr_markers(nits, val=MOON_HDR_WHITE)         # marker用白点nits亮度
     pq = _pq_encode(nits)
     pq16 = (np.clip(pq, 0, 1) * 65535 + 0.5).astype(np.uint16)
     # 角分文字: 8bit渲染文字蒙版, 叠到PQ帧(PIL不支持16bit RGB绘字, 故用蒙版)。
@@ -222,23 +232,21 @@ def _angle_text_mask(D, shape):
     return np.asarray(g) > 128
 
 
-def _add_hdr_markers(frame):
-    """在三栏HDR线性帧上加月面观测点三角+全景特写框(线性亮值,过PQ后可见)。"""
+def _add_hdr_markers(frame, val=2.0):
+    """在三栏HDR帧上加月面观测点三角+全景特写框。val=marker亮度(线性帧用2, nits帧用白点nits)。"""
     H, W3 = frame.shape[:2]
     pw = (W3 - 12) // 3                                # 每栏宽(含gap)
-    # 月面panel(第1栏)中心: 观测点三角(青)
     cyp = H // 2; cxp = pw // 2
-    for dy in range(8):
+    for dy in range(8):                                # 月面观测点三角(青)
         half = 8 - dy
-        frame[max(0,cyp-8+dy), max(0,cxp-half):cxp+half] = [0.0, 2.0, 2.0]
-    # 全景panel(第2栏)左缘: 特写框(黄)
-    px0 = pw + 6
+        frame[max(0,cyp-8+dy), max(0,cxp-half):cxp+half] = [0.0, val, val]
+    px0 = pw + 6                                       # 全景左缘特写框(黄)
     cxp2 = px0 + int((-RE.ANG_EARTH + RE.ANG_EARTH*1.15) / (2*RE.ANG_EARTH*1.15) * pw)
     bs = 22
     for t in range(-bs, bs+1):
         for e in [-bs, bs]:
-            frame[np.clip(cyp+e,0,H-1), np.clip(cxp2+t,0,W3-1)] = [2.0, 2.0, 0.0]
-            frame[np.clip(cyp+t,0,H-1), np.clip(cxp2+e,0,W3-1)] = [2.0, 2.0, 0.0]
+            frame[np.clip(cyp+e,0,H-1), np.clip(cxp2+t,0,W3-1)] = [val, val, 0.0]
+            frame[np.clip(cyp+t,0,H-1), np.clip(cxp2+e,0,W3-1)] = [val, val, 0.0]
 
 
 def _draw_angle(rgb8, D):
