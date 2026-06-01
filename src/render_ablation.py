@@ -53,11 +53,14 @@ def _build_lut_pointsource(**kw):
 
 
 def _build_lut_disk(n_disp=1, solar_mode="real"):
-    """圆盘 a→XYZ LUT(金标准 brute_trace)。solar_mode 经 brute_trace 内部(默认real)。"""
-    import importlib
+    """圆盘 a→XYZ LUT(金标准 brute_trace)。分箱有蒙特卡洛统计噪声→高分辨率渲染可见banding,
+    用高斯平滑(sigma=2bins≈0.16', 远小于绿松石带4'尺度)消噪不损物理(最蓝R/B不变)。"""
+    from scipy.ndimage import gaussian_filter1d
     res = bt.brute_trace(n_h=200000, n_xi=257, bin_width=0.08,
                          a_grid_lo=18, a_grid_hi=72, n_disp=n_disp)
     a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"]
+    for c in range(3):
+        XYZ[:, c] = gaussian_filter1d(XYZ[:, c], sigma=2.0)   # 消分箱噪声(banding)
     yref = np.percentile(XYZ[Y > 0, 1], 99); XYZ = XYZ / max(yref, 1e-9)
     i_peak = int(np.argmax(XYZ[:, 1])); XYZ[i_peak:] = XYZ[i_peak]
     return dict(a=a, XYZ=XYZ)

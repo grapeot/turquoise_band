@@ -146,9 +146,12 @@ def build_disk_lut(n_h=300000, n_xi=257, bin_width=0.08, a_lo=18.0, a_hi=72.0):
     归一: 趋白外缘 Y→正常月光 1.0。返回 dict(a, XYZ, a_lo, a_hi) 供 shade_disk_lut 查。
     """
     import brute_ray_trace as bt
+    from scipy.ndimage import gaussian_filter1d
     res = bt.brute_trace(n_h=n_h, n_xi=n_xi, bin_width=bin_width,
                          a_grid_lo=a_lo, a_grid_hi=a_hi)
     a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"].copy()
+    for c in range(3):
+        XYZ[:, c] = gaussian_filter1d(XYZ[:, c], sigma=2.0)   # 消分箱噪声(banding artifact)
     yref = np.percentile(XYZ[Y > 0, 1], 99)
     XYZ = XYZ / max(yref, 1e-9); Yn = XYZ[:, 1]
 

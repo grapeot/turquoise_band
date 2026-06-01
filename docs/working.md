@@ -370,3 +370,16 @@ SDR(a20c58)+HDR(1ea646, PQ)重渲上传, 1086×1086方形。
 - **步2本影露极暗纹理**(用户debate: 全黑还是留纹理): 本影内不纯黑(×0.04), 留月面纹理作连续锚点
   贯穿6步(月亮还在、只是没被照亮), 也符合真实(地球反照/星光)。
 - 交付 outputs/ablation/step_*.tif (6张)。
+
+### 2026-05-31（续15）— 修圆盘LUT banding(分箱噪声) + 清理
+
+**banding**(用户: 高分辨率ablation step5/6可见banding, LUT artifact): 根因是 brute_trace 分箱的
+**蒙特卡洛统计噪声**(撒线落点分箱, 相邻bin计数涨落→a→XYZ曲线不平滑, 绿松石带区相邻bin ΔY/Y达3-7%)。
+不同于render_rt早期治的拓扑banding。修: build_disk_lut/_build_lut_disk 对a→XYZ各通道高斯平滑
+(sigma=2bins≈0.16', 远小于绿松石带4'尺度)。粗糙度(二阶差)降98%, 物理保真(最蓝R/B 0.699→0.701不变)。
+依赖 scipy.ndimage.gaussian_filter1d(venv已装1.17.1)。重渲step5/6 TIFF。
+
+**灯光提亮**(用户提过想只提亮城市灯光不提亮整个夜面): 试了暗部抬升曲线(_panel_to_nits_darklift),
+但它把整个夜面都抬亮、达不到"只亮灯", 用户决定跳过。已撤销, HDR地球panel恢复原线性映射。
+
+清理: trash tmp下本轮调试预览图。video_frames帧目录(中间产物)保留(gitignore不进库)。

@@ -259,7 +259,7 @@ def _render_hdr_frame(args):
     g = 6
     # 每panel独立映射到nits。光谱panel(8bit)→nits(当作SDR内容, 映到~200nit白)。
     moon_n = _panel_to_nits(moon, MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE)
-    full_n = _panel_to_nits(full, FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE)
+    full_n = _panel_to_nits(full, FULL_HDR_EXP, FULL_HDR_BLACK, FULL_HDR_WHITE)    # 全景独立
     close_n = _panel_to_nits(close, CLOSE_HDR_EXP, CLOSE_HDR_BLACK, CLOSE_HDR_WHITE)
     spec8 = render_spectrum_panel(D).astype(np.float32) / 255.0
     spec_n = R._srgb_inv_gamma(spec8) * 200.0    # 光谱图按SDR内容映到200nit
