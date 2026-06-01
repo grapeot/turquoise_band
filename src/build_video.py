@@ -83,6 +83,9 @@ def render_spectrum_panel(D, size=None):
     ax.set_xlim(380, 780); ax.set_ylim(0, 1.05)
     ax.set_xlabel("波长 (nm)", color="w", fontsize=9)
     ax.set_title("绿松石带的光谱成因", color="w", fontsize=11)
+    # 注明简化: 这是月心对应的单一擦边高度的透射谱(非太阳圆盘积分), 教学用、最干净展示机制
+    ax.text(0.015, 0.02, "月心对应的单一擦边高度", transform=ax.transAxes,
+            color="#888", fontsize=6.5, ha="left", va="bottom")
     ax.tick_params(colors="w", labelsize=8)
     ax.legend(loc="upper right", fontsize=7.5, facecolor="#222", labelcolor="w", framealpha=0.75)
     for s in ax.spines.values(): s.set_color("#888")
