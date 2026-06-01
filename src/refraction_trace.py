@@ -158,6 +158,55 @@ def trace_ray(h_km, z_top_km=120.0, ds_km=0.02, return_path=False):
     return res
 
 
+def trace_rays_batch(h_array, z_top_km=120.0, ds_km=0.02):
+    """矢量化批量追踪: 一次并行积分所有擦边高度的光线(状态 (N,4) 数组, 锁步 RK4)。
+
+    与逐条 trace_ray 物理完全相同(同方程同步长), 但所有光线同时推进——已退出/撞地的光线
+    用 active 掩码冻结。返回 (alpha (N,), z_tan (N,), blocked (N,))。性能: 替代 N 次 Python
+    for 循环, numpy 矢量化吃满核(折射是 ray tracing 最大热点之一)。
+    """
+    h = np.atleast_1d(np.asarray(h_array, dtype=float))
+    N = h.size
+    r_top = R_EARTH + z_top_km
+    b = R_EARTH + h
+    above = b >= r_top                       # 擦边高于大气顶: 不折射
+    x = np.where(above, 0.0, -np.sqrt(np.maximum(r_top**2 - b**2, 0.0)))
+    y = b.copy()
+    ux = np.ones(N); uy = np.zeros(N)
+    state = np.stack([x, y, ux, uy], axis=1)  # (N,4)
+
+    def deriv(s):
+        xx, yy, vx, vy = s[:, 0], s[:, 1], s[:, 2], s[:, 3]
+        r = np.hypot(xx, yy); n = n_of_r(r); g = dn_dr(r)
+        rx, ry = xx / r, yy / r; gx, gy = g * rx, g * ry
+        ud = vx * gx + vy * gy
+        return np.stack([vx, vy, (gx - ud * vx) / n, (gy - ud * vy) / n], axis=1)
+
+    in_atmos = np.zeros(N, bool); blocked = np.zeros(N, bool); done = above.copy()
+    r_min = np.hypot(state[:, 0], state[:, 1])
+    max_steps = int(2.0 * np.max(np.abs(x)) / ds_km) + 20000
+    for _ in range(max_steps):
+        r = np.hypot(state[:, 0], state[:, 1])
+        r_min = np.minimum(r_min, r)
+        in_atmos |= (r <= r_top + 1e-9)
+        exit_now = in_atmos & (r > r_top) & (state[:, 0] > 0.0) & ~done
+        hit = (r < R_EARTH) & ~done
+        blocked |= hit; done |= exit_now | hit
+        if done.all():
+            break
+        act = ~done
+        k1 = deriv(state); k2 = deriv(state + 0.5 * ds_km * k1)
+        k3 = deriv(state + 0.5 * ds_km * k2); k4 = deriv(state + ds_km * k3)
+        upd = (ds_km / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        state[act] = state[act] + upd[act]
+        un = np.hypot(state[:, 2], state[:, 3])
+        state[:, 2] /= un; state[:, 3] /= un
+    alpha = np.arctan2(-state[:, 3], state[:, 2])
+    alpha[above] = 0.0
+    z_tan = r_min - R_EARTH
+    return alpha, z_tan, blocked
+
+
 def refraction_angle_traced(h_km, **kw):
     """真追踪折射偏转角 α(h) (rad)，可数组。替换 geometry.refraction_angle。
 
