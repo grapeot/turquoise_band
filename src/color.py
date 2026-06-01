@@ -11,6 +11,13 @@ import colour
 # CIE 1931 2° 标准观察者色匹配函数
 _CMF = colour.MSDS_CMFS["CIE 1931 2 Degree Standard Observer"]
 
+# sRGB(D65) XYZ→线性RGB 变换矩阵。单一来源, ray tracing 取线性 R/B 用。
+M_XYZ2RGB_LINEAR = np.array([
+    [3.2404542, -1.5371385, -0.4985314],
+    [-0.9692660, 1.8760108, 0.0415560],
+    [0.0556434, -0.2040259, 1.0572252],
+])
+
 
 def spectrum_to_XYZ(lam_nm, spec):
     """把谱 spec(lam) 积分成 CIE XYZ（未归一化，保留相对亮度）。

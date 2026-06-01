@@ -34,13 +34,14 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import atmosphere
 import cross_sections
+import geometry as _g
 
-R_EARTH = 6371.0  # km
+R_EARTH = _g.R_EARTH  # km, 单一来源
 
-# 海平面空气折射率 (n-1)。可见光 ~600nm 干空气标准值 ≈ 2.78e-4。
-# 与 cross_sections 里 Edlén 色散一致量级; 折射的色散(蓝光弯更多)由落点管线另算,
-# 这里消光积分用消色差的几何路径(路径形状对 λ 的依赖 ~1e-4 量级, 对 τ 可忽略)。
-N_SEA_REFRACTIVITY = 2.78e-4
+# 海平面空气折射率 (n-1)@600nm, 取 cross_sections 公共值(与折射/瑞利自洽, 之前 2.78e-4 已统一)。
+# 折射的色散(蓝光弯更多)由落点管线另算; 这里消光积分用消色差几何路径(路径形状对 λ 依赖
+# ~1e-4 量级, 对 τ 可忽略, 见 dispersion_scale limitation)。
+N_SEA_REFRACTIVITY = cross_sections.NU0_SEA_600
 
 
 def refractive_index(z_km):

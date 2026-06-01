@@ -68,6 +68,11 @@ def refraction_angle(h_km):
     return ALPHA0_RAD * np.exp(-np.asarray(h_km, dtype=float) / H_REFRAC_KM)
 
 
+def ang_sun_rad():
+    """太阳角半径 (rad) ≈ 16'，从月球看。单一来源, ray tracing 各处共用。"""
+    return float(np.arctan(R_SUN_KM / D_SUN_KM))
+
+
 def umbra_radius_km():
     """月球处地球本影半径 (km)。会聚影锥：R_u = R⊕ − (R_sun−R⊕)·d_moon/d_sun。"""
     return R_EARTH - (R_SUN_KM - R_EARTH) * D_MOON_KM / D_SUN_KM

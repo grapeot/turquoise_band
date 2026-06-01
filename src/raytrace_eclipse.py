@@ -51,36 +51,24 @@ import refraction_trace as rtr       # 真折射 RK4 积分 α(h) + 撞地遮挡
 import curved_path as cp             # 真弯曲路径 τ(λ,h)
 import solar
 import color as col
+import cross_sections as cs
 
 R_EARTH = g.R_EARTH
 D_MOON = g.D_MOON_KM
 
-# sRGB(D65) 线性变换矩阵，用于从累加 XYZ 取线性 R/B（判断绿松石带颜色）
-_M_XYZ2RGB = np.array([
-    [3.2404542, -1.5371385, -0.4985314],
-    [-0.9692660, 1.8760108, 0.0415560],
-    [0.0556434, -0.2040259, 1.0572252],
-])
-
-
-def ang_sun_rad():
-    """太阳角半径 (rad) ≈ 16'。"""
-    return float(np.arctan(g.R_SUN_KM / g.D_SUN_KM))
-
-
-def _n_minus_1(lam_nm):
-    """干空气折射率 (n-1)，Edlén。用于折射角的波长依赖（色散，蓝光弯更多）。"""
-    sig2 = (1.0e3 / np.asarray(lam_nm, float)) ** 2
-    return (8342.54 + 2406147.0 / (130.0 - sig2) + 15998.0 / (38.9 - sig2)) * 1e-8
+_M_XYZ2RGB = col.M_XYZ2RGB_LINEAR   # sRGB(D65) 线性矩阵, 单一来源(color模块)
+ang_sun_rad = g.ang_sun_rad         # 太阳角半径(rad), 单一来源(geometry模块)
 
 
 def dispersion_scale(lam_nm, lam_ref=600.0):
     """折射角随波长缩放 α(λ)/α(ref)。蓝端 (n-1) 大 → 折射更强 → 落点更靠外（棱镜效应）。
 
-    注意：这不是 artificial 参数——它是 Edlén 干空气色散的直接比值，物理上折射率本就
-    随波长变。真追踪的 α 用 600nm 折射率积出，这里按 (n-1) 比值把它缩放到各波段。
+    注意：这不是 artificial 参数——它是干空气色散(cross_sections.dry_air_n_minus_1,
+    Peck&Reeder, 与瑞利截面同一来源)的直接比值, 物理上折射率本就随波长变。
+    Limitation: 假设 α(λ) 对 (n-1) 线性、路径形状消色差(~1e-4 量级可忽略); α 绝对值仍来自
+    refraction_trace 的 RK4 真追踪(用600nm折射率), 这里只把它按色散比值缩放到各波段。
     """
-    return _n_minus_1(lam_nm) / _n_minus_1(lam_ref)
+    return cs.dry_air_n_minus_1(lam_nm) / cs.dry_air_n_minus_1(lam_ref)
 
 
 def _precompute_alpha_traced(h_nodes, ds_km=0.02, z_top_km=120.0):
@@ -211,9 +199,16 @@ def forward_trace(
     ray_flux = PHI0 * A_ring / n_rays_b
     full_moon_surface_brightness = 1.0
 
-    # 预插值 blocked 掩码（用最近邻：落在 blocked 节点区间的 h 不发光）
-    # 阈值 = 擦地极限高度，低于它一律 blocked
-    h_block_thresh = h_graze
+    # B6 修复: blocked 用逐节点最近邻插值(不用单一标量阈值, 避免 blocked 区不连续时出错);
+    # α 插值前把 blocked 节点用最近的 unblocked 边界 α 填充(不填 0, 避免紧邻 blocked 的
+    # unblocked 光线被 0 线性混合而 α 被低估)。
+    alpha_clean = alpha_nodes.copy()
+    if np.isnan(alpha_clean).any() and (~blocked_nodes).any():
+        first_ok = np.argmax(~blocked_nodes)          # 第一个 unblocked 节点(擦地边界)
+        alpha_clean[:first_ok] = alpha_clean[first_ok]  # blocked 段用边界 α 外推填充
+    alpha_clean = np.nan_to_num(alpha_clean, nan=float(alpha_clean[~blocked_nodes][-1])
+                                if (~blocked_nodes).any() else 0.0)
+    blocked_f = blocked_nodes.astype(float)           # 逐节点 blocked 状态(0/1)
 
     chunk = 1_000_000
     done = 0
@@ -227,8 +222,8 @@ def forward_trace(
         h = b_mag - R_e
 
         # 真追踪 α(h)：对 blocked 的 h（h<擦地极限）置 nan → 该光线撞地，不落月面
-        alpha0 = np.interp(h, h_nodes, np.nan_to_num(alpha_nodes, nan=0.0))
-        unblocked = h >= h_block_thresh
+        alpha0 = np.interp(h, h_nodes, alpha_clean)          # 边界外推填充, 不被0拉低
+        unblocked = np.interp(h, h_nodes, blocked_f) < 0.5   # 逐节点blocked最近邻
 
         si = rng.integers(0, n_sun, size=m)
         sdx = sun_dx[si]; sdy = sun_dy[si]

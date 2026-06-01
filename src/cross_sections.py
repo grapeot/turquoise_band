@@ -5,6 +5,22 @@
 import numpy as np
 
 
+def dry_air_n_minus_1(lam_nm):
+    """标准干空气折射率 (n-1) 的波长色散，Peck & Reeder 1972 / Edlén。15°C 海平面 STP。
+
+    单一来源(single source of truth): 瑞利截面、折射弯曲、色散位移全调它, 保证内部自洽。
+    600nm 处 (n-1)≈2.7e-4(标准值)。
+    """
+    lam_um = np.asarray(lam_nm, dtype=float) / 1000.0
+    inv2 = 1.0 / lam_um**2
+    return (8060.51 + 2480990.0 / (132.274 - inv2) + 17455.7 / (39.32957 - inv2)) * 1e-8
+
+
+# 海平面参考折射度(@600nm)与数密度——折射模块统一从这里取, 不各自硬编码。
+NU0_SEA_600 = float(dry_air_n_minus_1(600.0))   # ≈2.7e-4
+N0_SEA = 2.546899e19                             # cm^-3, 海平面 15°C 分子数密度
+
+
 def sigma_rayleigh(lam_nm):
     """空气分子的瑞利散射截面，单位 cm^2/分子。
 
@@ -23,13 +39,9 @@ def sigma_rayleigh(lam_nm):
     """
     lam_um = np.asarray(lam_nm, dtype=float) / 1000.0  # 转微米
 
-    # 标准干空气折射率色散 (Peck & Reeder 1972 / Edlén)，(n-1)*1e8
-    inv2 = 1.0 / lam_um**2
-    n_minus_1 = (8060.51 + 2480990.0 / (132.274 - inv2) + 17455.7 / (39.32957 - inv2)) * 1e-8
+    n_minus_1 = dry_air_n_minus_1(lam_nm)   # 公共色散(single source of truth)
     n = 1.0 + n_minus_1
-
-    # 标准状态分子数密度 (cm^-3)，海平面 15°C
-    N_s = 2.546899e19
+    N_s = N0_SEA                             # 海平面 15°C 分子数密度
 
     # King 修正因子（去极化），可见光近似取 1.048
     F_king = 1.048

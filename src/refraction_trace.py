@@ -34,13 +34,16 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import atmosphere as atm
 
-R_EARTH = 6371.0          # km
+import geometry as _g
+import cross_sections as _cs
+
+R_EARTH = _g.R_EARTH      # km, 单一来源
 ARCMIN_PER_RAD = np.degrees(1.0) * 60.0
 
-# 折射率标定: (n-1) = KAPPA · N(z)。海平面 N0=2.548e19 cm^-3, 标准 (n-1)0=2.7e-4。
-N0_SEA = 2.546899e19
-NU0_SEA = 2.7e-4          # 可见光海平面折射度 (n-1)。STP 标准值
-KAPPA = NU0_SEA / N0_SEA  # cm^3, 折射度/数密度
+# 折射率标定: (n-1) = KAPPA · N(z)。海平面 (n-1)0 与数密度都取 cross_sections 公共值(自洽)。
+N0_SEA = _cs.N0_SEA
+NU0_SEA = _cs.NU0_SEA_600  # 可见光海平面折射度 (n-1)@600nm, Peck&Reeder
+KAPPA = NU0_SEA / N0_SEA   # cm^3, 折射度/数密度
 
 
 def refractivity(z_km):
