@@ -41,26 +41,28 @@ EARTH_TEX = np.asarray(Image.open(_earth_p).convert("RGB"), float) / 255.0 if os
 R_MOON = R.R_MOON_ARCMIN
 R_UMBRA = R.R_UMBRA_ARCMIN
 
-def _panel_tonemap(rgb_lin, gamma, target):
-    """每panel独立的SDR tone map(无floor, 时间上全局定死, 不per-frame)。
-    旧版那套(对比好): 亮度幂律压缩 Y^gamma(收窄动态范围,保对比) + 对数高光肩部。
-    gamma 越小压得越狠(暗部越亮); target 是正常参考亮度映到的sRGB。
-    色相保持: 按亮度映射比缩放RGB。无floor→暗部自然暗, 保留spatial对比。
+def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
+    """每panel独立 SDR tone map(无floor, 时间全局定死, 不per-frame)。
+
+    分段曲线(替代旧的 gamma+对数肩部——那套把对比压平、高光永不到白):
+    - 暗部(Y<=knee): gamma 提亮保暗部层次/对比, knee 处亮度=target
+    - 亮部(Y>knee):  线性快速冲到 1(白)——高光能真正 clip, 太阳露出时大气 bloom 到白
+    这样既保住 spatial 对比(月球右亮左暗), 又让高光饱和(钻石环/大气 bloom)。
+    色相保持: 按亮度映射比缩放 RGB。
     """
     Y = np.maximum(0.2126*rgb_lin[...,0]+0.7152*rgb_lin[...,1]+0.0722*rgb_lin[...,2], 1e-12)
-    Yc = np.power(Y, gamma)                              # 幂律压缩动态范围(保对比)
-    E = R._srgb_inv_gamma(target) / (1.0 ** gamma)      # 曝光: 正常亮度(Y=1)映到target
-    EY = E * Yc
-    Yd = 0.92 * np.log2(1.0 + EY) / np.log2(1.0 + E)     # 对数肩部(亮部不死白)
-    Yd = np.clip(Yd, 0, 1)
+    yk = target * np.power(np.minimum(Y, knee), gamma) / np.power(knee, gamma)  # 暗部gamma
+    over = np.maximum(Y - knee, 0.0)
+    Yd = np.clip(yk + over * (1.0 - target) / knee, 0.0, 1.0)  # 过knee线性冲白, 再涨1个knee到1
     scale = (Yd / Y)[..., None]
     return R._srgb_gamma(np.clip(rgb_lin * scale, 0, 1))
 
 
 # 三个 panel 各自独立的 (gamma, target)——无floor, 时间全局定死, 每panel独立。
-MOON_GAMMA, MOON_TGT = 0.40, 0.80      # 月球: 血月暗部有层次保对比, 正常月光亮
-EARTH_GAMMA, EARTH_TGT = 0.55, 0.85    # 地球全景: 夜面暗(gamma压缩不抬太狠), 环/太阳亮
-CLOSE_GAMMA, CLOSE_TGT = 0.55, 0.85    # 地球特写: 环颜色梯度
+# gamma 越小暗部越亮; target=正常亮度(Y=1=knee)映到的显示值, 留(1-target)余量给高光冲白。
+MOON_GAMMA, MOON_TGT = 0.80, 0.78      # 月球: 接近线性保大对比(右出本影亮/左深本影血月暗), 暗部仍有层次
+EARTH_GAMMA, EARTH_TGT = 0.55, 0.72    # 地球全景: 夜面暗于环, 环/太阳能冲白
+CLOSE_GAMMA, CLOSE_TGT = 0.62, 0.70    # 地球特写: 环颜色梯度保留, 高光bloom到白
 
 # (旧的全局 gamma 月面曝光, render_textured 仍用)
 DYN_GAMMA = 0.35

@@ -84,6 +84,6 @@
 1. [x] reassess 绿松石（验证物理没坏）
 2. [ ] 落盘 commit（本次）
 3. [ ] 写 plan（含三条SDR feedback，本次已写）
-4. [ ] 回头更新 SDR（解决 tone map 太平 + 高光不饱和 三问题）→ commit
+4. [x] 更新 SDR（分段曲线: 暗部gamma+亮部线性冲白; 夜面0.12→0.045）→ 三问题解决, 两版重渲上传。见 working.md 续8
 5. [ ] 多因素 evaluation study + visualization（逐因素叠加）
 到那时用户会有新反馈。
