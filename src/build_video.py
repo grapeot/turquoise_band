@@ -27,9 +27,12 @@ SSAA = 2
 
 # 预建物理表（复用）
 print("建物理表...")
-# 月面食光: 圆盘 ray tracing 金标准 LUT(太阳圆盘有限元, 非点源)——绿松石带浅青软边、靠内,
-# 物理正确(见 PHYSICS_AND_PITFALLS 二·五)。a→XYZ 与 d 无关, 建一次全帧复用。亮斑天然无(圆盘正则化)。
-MOON_LUT = render_rt.build_disk_lut(n_h=300000, n_xi=257)
+# 月面食光: **真·正向 ray tracing** a→XYZ LUT(零 artificial 参数, 真折射 RK4+弯曲消光+撒线,
+# focusing/本影暗度自然涌现)。本影中心真实暗(-13档), 替换旧圆盘LUT(偏亮-7.7)。a→XYZ 与 d 无关,
+# 建一次全帧复用。出本影端 clamp 真满月。见 working.md 续21。
+import raytrace_eclipse as rte
+MOON_LUT = rte.build_lut_from_raytrace(n_rays_b=4_000_000, n_sun=2000,
+                                       n_h_nodes=500, n_pix=300, n_disp=12)
 RING_T = RE._ring_color_table()
 # 月面纹理 + 地球夜面
 Image.MAX_IMAGE_PIXELS = None
@@ -122,7 +125,7 @@ def _panel_tonemap(rgb_lin, gamma, target, knee=1.0):
 # HDR _panel_to_nits:  nits = black + exp·Y·white。black=暗部floor, white=正常亮度对应nits。
 # ----------------------------------------------------------------------------
 # [月球 panel] 接近线性保大对比(右出本影亮/左深本影血月暗), 暗部仍有层次
-MOON_GAIN,  MOON_GAMMA,  MOON_TGT  = 1.0,  0.80, 0.78
+MOON_GAIN,  MOON_GAMMA,  MOON_TGT  = 1.0,  0.45, 0.78   # g0.80→0.45: 真ray tracing本影暗-13档, 强暗部提亮让血月可见有层次
 MOON_HDR_EXP, MOON_HDR_BLACK, MOON_HDR_WHITE = 1.0, 0.1, 200.0   # 血月floor 0.8→0.1(深本影回物理真实~0.3nit不过亮), 满月200够亮
 # [地球全景 panel] 夜面暗于环(夜面亮度见 render_earth 夜面系数), 钻石环/太阳冲白
 FULL_GAIN,  FULL_GAMMA,  FULL_TGT  = 1.0,  0.80, 0.72   # g0.55→0.80: 接近线性保环方位variance(太阳侧亮/背侧暗, 修"差不多亮")

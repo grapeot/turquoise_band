@@ -539,6 +539,24 @@ vs解析15.7')→向中心弯更多。
 这是thesis"暴力第一性原理让focusing自然涌现、比解析近似更对"的最硬证据。
 待: 亲手跑raytrace_eclipse.py验证 + 性能优化(GPU, 现版np.add.at慢)。
 
+### 2026-06-01（续22）— 七步收尾(真ray tracing接入产品): 1-5步完成
+
+用户七步计划: 落盘→test→review重构→性能→更新视频→更新ablation→polish艺术图。前5步:
+
+1. **落盘**(c055f92): 本影中心-13.0档亲手验证。
+2. **test**(6f1a8d6): 9个物理不变量测试(折射/消光/集成), pytest.ini注册slow marker。
+3. **review+重构**(aacdc5d): (n-1)三处不一致(2.7/2.78e-4)统一到cross_sections.dry_air_n_minus_1
+   单一来源; 删forward_ray_trace.py(dead code); ang_sun_rad→geometry/_M_XYZ2RGB→color共用;
+   B6 blocked逐节点掩码修静默偏差。9 test全过。
+4. **性能**(457d690): 折射RK4矢量化trace_rays_batch(锁步并行, **80×**, α逐位一致CPU双跑验证);
+   np.add.at→np.bincount。完整ray tracing分钟级→**4.1s**, test 6min→1.8min。解决CPU占用低。
+5. **视频接真ray tracing**(本轮): build_lut_from_raytrace建a→XYZ LUT(本影-13档真实暗, 出本影
+   clamp真满月直射, 全帧复用)替换旧圆盘LUT(偏亮-7.7)。MOON_GAMMA 0.80→0.45(强暗部提亮让-13档
+   暗本影的古铜血月可见有层次)。深食D=20现真实古铜色血月有月海层次, 明暗交界自然。
+   SDR(51215e)+HDR(5db728)重渲上传。整个项目物理统一(视频/ablation/测光同一套真ray tracing)。
+
+待: 6.更新ablation 7.polish艺术图。
+
 **轨迹合成图**(临时分享用, 用户明确是艺术图非测光精确): outputs/eclipse_composite.tif
 - 斜25°(用户要30°/调研20-30°自然)、食甚铜红居中、星空(subtle带色点星)、本影段密满月端疏。
 - HDR nits tone map(不夸张增强, 用户反馈之前那套怪)。月海纹理保留。
