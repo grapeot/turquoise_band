@@ -643,3 +643,29 @@ Vollmer & Gedzelman 署名更正（P&P/SCIENCE_REVIEW）；README 状态/结论/
 
 **下游 artifact 注意**：视频/ablation step6/photometric_profile 均为修复前 LUT 渲出，
 数字已过期（满月端假衰减+中心偏亮 0.7 档），任务 D1c 统一重渲。
+
+### 2026-06-09（续）— band_profiles 收编为 src/band_profile.py + R/B 口径统一 + 模型卡（任务 D1b 的口径部分）
+
+暗端对账临时脚本收编为正式模块 `src/band_profile.py`（相对路径、补气溶胶沿弯曲路径的
+tau_aer550 提取、补太阳 limb darkening、加 Shu/GF-4 窄带 B2=450-520/B4=630-690、
+保留 ext/geo 稀释/消光分解）。`rb_shu_profile()` 把 R/B 三口径显式分解：
+raw（含太阳谱斜率，带平均 S=0.799）→ sun-norm（÷S，中性白=1）→ Shu 口径（raw×A，
+A=反照率比 654/491=1.35±15%）。注意勘误2 的"相消"用的是单色 654/491=0.737，模块同时
+给 λ_eff 单色变体（基线 S·A=0.995）与 boxcar 变体（1.079）。
+`python src/band_profile.py --model-card` 产出 docs/MODEL_CARD.md（4M 光线，默认物理）。
+
+**关键数字（详见 MODEL_CARD）**：本影中心 photopic 分子上限 −13.51 档 / 默认（气溶胶+LD）
+−15.01 档（forward_trace cross-check −15.20）；B/V/R 中心 16.65/11.76/9.11 mag（带内归一，
+几何稀释 ~4.6 mag + 消光）；min raw sRGB R/B 默认 0.832@41.0'、分子口径 0.715@40.3'
+（历史 0.70@41' 是分子口径——背景气溶胶 Ångström 蓝坡把渲染对比冲淡 0.72→0.83，注意下游）。
+
+**实证发现（如实记录，未调参）**：单层窄带凹陷（654/491 透射比最低 0.866@z_tan≈25km）
+经 32' 太阳盘卷积+本影红层流入后在 1D 径向平均上**不存活**（剖面凹陷只剩 ~0.997，噪声级）
+——Shu 口径无论变体都复现不出文献 R/B<1 ribbon / in-band 0.8-1.0。归因假设（按可能性）：
+我们本影内偏亮 4-8 mag → 红层洪泛偏强，把窄带 teal 淹没（**与暗端偏亮同根因的两端表现**）；
+GF-4 实际 RSR 若含 600-630nm 边带会直接采到 Chappuis 核；2D 边界像素 vs 1D 径向平均口径差。
+sRGB 宽带蓝化稳健（R 通道正压 Chappuis 核 580-640，B4 大半避开核区）。
+
+测试：src/tests/test_band_profile.py 新增 3 个（太阳带比值三口径常数 0.737/0.799/0.685、
+tau_aer550 提取与 tau_curved on−off 严格一致、slow 撒线口径不变量：直射区 sun-norm=1±2%、
+带剖面红侧单调逼近 1、三口径常数关系）。全套 16/16 过。
