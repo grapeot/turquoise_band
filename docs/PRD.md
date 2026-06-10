@@ -1,5 +1,7 @@
 # PRD：月全食绿松石带的物理重现
 
+> **历史文档**：本文写于项目 scaffold 期（2026-05-31），记录当时的目标与设计。项目实际终点远超此范围（真·正向 ray tracing、对偶视角视频、ablation、HDR）。当前权威状态见 `working.md`（Key Technical Decisions）与 `MODEL_CARD.md`；对外结论层是 `README.md`。
+
 ## 一句话
 
 从第一性的辐射传输出发，计算月全食期间月面颜色随大气穿透几何的变化，定量重现并最终渲染那条介于暗红本影与正常月光之间的**绿松石带（turquoise band）**。

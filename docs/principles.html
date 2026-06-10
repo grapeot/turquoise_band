@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="月食绿松石带模拟的原理深度解读：六个关键技术决策、与文献的三组对账、模型卡关键数字，以及每张图的可复现命令。">
+  <title>原理深度解读 · 月食绿松石带</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060504;
+      --panel: #14100d;
+      --text: #ede7e0;
+      --muted: #a89c91;
+      --line: rgba(208, 191, 178, 0.18);
+      --copper: #c98a5e;
+      --teal: #8fd2c9;
+      --max: 880px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.85;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+    img { display: block; max-width: 100%; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 8, 6, 0.96);
+    }
+
+    .topbar-inner {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(201, 138, 94, 0.62);
+      border-radius: 50%;
+      background: radial-gradient(circle at 38% 50%, rgba(150, 60, 32, 0.9) 0 7px, transparent 8px), radial-gradient(circle at 72% 50%, rgba(143, 210, 201, 0.85) 0 3px, transparent 4px);
+    }
+
+    .nav { display: flex; gap: 18px; color: var(--muted); font-size: 14px; white-space: nowrap; }
+    .nav a:hover { color: var(--text); }
+
+    main {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 56px 0 80px;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--copper);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.16; letter-spacing: -0.02em; margin: 0 0 18px; }
+    h2 { font-size: clamp(24px, 3.6vw, 34px); line-height: 1.2; letter-spacing: -0.02em; margin: 72px 0 8px; }
+    h3 { font-size: 20px; margin: 44px 0 6px; }
+
+    p { margin: 14px 0 0; color: #d3c8bc; }
+    .lead { font-size: clamp(17px, 1.8vw, 20px); color: #d8cec4; }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #e6ddd1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    pre code { border: 0; padding: 0; background: none; }
+
+    table {
+      width: 100%;
+      margin: 18px 0 0;
+      border-collapse: collapse;
+      font-size: 14.5px;
+    }
+
+    th, td {
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      color: #d3c8bc;
+    }
+
+    th {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.045);
+      font-weight: 680;
+    }
+
+    .table-wrap { overflow-x: auto; margin-top: 8px; }
+
+    .note {
+      margin-top: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(201, 138, 94, 0.42);
+      border-radius: 12px;
+      background: rgba(201, 138, 94, 0.07);
+    }
+
+    .note p { margin: 0; }
+    .note p + p { margin-top: 10px; }
+
+    footer {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 60px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    @media (max-width: 720px) {
+      .nav a.hide-mobile { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="index.html" aria-label="返回主页">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>月食绿松石带</span>
+      </a>
+      <nav class="nav" aria-label="页面导航">
+        <a class="hide-mobile" href="#decisions">六个决策</a>
+        <a class="hide-mobile" href="#literature">文献对账</a>
+        <a class="hide-mobile" href="#numbers">关键数字</a>
+        <a class="hide-mobile" href="#repro">复现</a>
+        <a href="index.html">返回主页</a>
+        <a data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <p class="eyebrow">写给想知道"为什么这样算"的人</p>
+    <h1>原理深度解读</h1>
+    <p class="lead">主页上每个像素的颜色都来自同一条物理链：实测太阳光谱进入地球大气，折射决定它弯到月面哪里，瑞利散射、臭氧吸收和背景气溶胶沿弯曲路径决定它剩下什么颜色，CIE 色匹配函数把出射谱积成颜色。没有贴图，没有调色参数，没有唯象修正。这一页讲清楚管线里六个关键技术决策、与三组独立文献的对账结果、模型卡里的关键数字（每个都标口径），最后给出每张图的可复现命令。</p>
+
+    <h2>三条贯穿始终的原则</h2>
+    <p>第一，物理层和显示层严格分开。光线追踪输出的是线性辐射量，这部分不为视觉效果让步；屏幕上的观感由曝光和 tone map 控制，这部分明确承认自己是显示决策。项目里最重要的一次教训正出在这里：早期渲染为暗部曝光，把暗淡的青带提亮成占月盘近三分之一的宽渐变，我们对着它怀疑了很久物理，最后发现是显示在制造假象。现在的默认曝光按月盘最亮处定标，保留亮度悬崖，带物理真实地窄。</p>
+    <p>第二，不为好看改物理。带偏蓝、带太宽、青不够饱和，每一次看着不对的诱惑出现，正解都是回去查度量、查显示或者查文献口径，而没有一次是往模型里加机制凑效果。这个纪律后来被卫星实测逐条回报：带内红蓝比、带的位置、浅青的观感，全部对上。</p>
+    <p>第三，能撒光线就不写公式。聚焦因子、弦长权重、有效路径长度这些解析处方，本来都是光线追踪的自然产物；把它们当公式算，就会算偏。本影中心亮度从解析版的 −7.7 档一路修到全涌现版的 −13.5 档，差出来的每一档都是某条解析近似欠下的债。下面六个决策里有四个在还这笔债。</p>
+
+    <h2 id="decisions">六个关键技术决策</h2>
+
+    <h3>一、折射不查公式表，逐条光线 RK4 积分</h3>
+    <p>常用的解析折射公式把偏转角写成擦边高度的指数函数，地表掠射偏转约 70′。逐条光线做 RK4 数值积分追踪后发现，这个 70′ 在真实大气里并不存在：瞄准高度 0 到 1 公里的光线弯着弯着切点就压到了地表以下，撞地，根本到不了月面。真正擦地而过的是瞄准高度约 1.7 公里的光线，偏转 63.5′。中高空的真实偏转也比解析公式大（12 公里处 21′ 对 15.7′），光线向本影中心弯得更多。折射几何是整个模型的骨架，骨架上的系统偏差会同时弄错颜色的位置和暗端的亮度，所以这里不省。</p>
+
+    <h3>二、消光沿弯曲路径积分，并且用真实切点高度</h3>
+    <p>光线弯了，它穿过大气的路径就比直线长，柱密度要沿弯曲路径累加。这里翻过一个口径车：管线曾把光线的瞄准高度（impact parameter）当成切点高度喂给消光积分，但折射会把真实切点压得更低，比如瞄准 2.7 公里的光线真实切点只有 1.1 公里，那里大气更稠密，消光被系统性低估。修正后本影中心暗了 0.68 档。教训与第三条原则同源：一个解析量混进零处方的管线，照样会咬人。</p>
+
+    <h3>三、聚焦与散焦不写公式，从落点密度涌现</h3>
+    <p>折射光在本影里会聚焦也会散焦，解析管线用一个聚焦因子公式去算，它在本影中心发散，还得加正则化下限去压，压完又造出移动亮斑。正确做法是回到光线追踪的本义：撒几百万条光线，落点分箱，落点密度就是亮度，聚焦和散焦自己出现。数字链记录了这条路：解析弦长权重给本影中心 −7.7 档；撒光线但落点仍用解析折射，−11 档；折射也换成真追踪，−13.1 档（口径：分子大气，photopic，0 档 = 未食满月）。判决性的诊断是这个：本影中心单条光线的单程透射只有 −7.9 档，但落点分箱出的面亮度是 −13.1 档，差出的 5.2 档全部来自几何散焦，最深的擦边光被摊薄到整个月面，没有任何公式写过它。</p>
+
+    <h3>四、半影直射光走同一套撒线</h3>
+    <p>月亮出本影时，太阳从地球边缘逐渐探出，直射光渐入。早期管线只追折射光，光度曲线在本影边界外有一截假跃变。修法没有打补丁平滑，而是把撒线的瞄准范围扩到大气层外 5500 公里：大气外的光线不弯、不衰减，半影区的直射光渐入就从同一套撒线里自然出现，曲线平滑爬到 73′ 处的满月。顺带一个工程教训：撒线覆盖域不足造成的假衰减，在这个项目里以不同面目复发过三次（末帧移动阴影、曲线尾巴下弯、直射光不足），现在覆盖域从消费端最大角距加太阳半径反推，写进了检查清单。</p>
+
+    <h3>五、分层抽样：同心环事件</h3>
+    <p>撒线范围扩大后埋了一颗雷。折射壳层只占总撒线面积的约 1.1%，400 万条光线里只有几万条走折射路径，摊到本影的一百多个径向环，每环只剩百量级的样本；统计噪声经 LUT 插值放大成月盘上肉眼可见的同心环，光度曲线同步出现锯齿。这个问题是用户审片时肉眼抓出来的，我们一度把它记成诚实保留的蒙特卡洛噪声，复查后改判：它是采样分配问题，可以消除。修法是标准的无偏方差缩减：折射壳层与直射壳层各按自身面积归一通量，光线配额对半分，本影内相邻环的跳变中位数从 0.158 档降到 0.085 档。教训是均匀撒线在面积比悬殊时会让关键小区域统计饥饿，分层抽样是第一性管线必交的税。</p>
+
+    <h3>六、两组分背景气溶胶与太阳临边昏暗</h3>
+    <p>最后补上的两块真实物理，参数全部取气候学观测值，没有一个是调出来的。背景气溶胶分两组分：对流层海洋背景（AOD550 = 0.07，指数廓线，Ångström 指数 0.7）和平流层硫酸盐细粒子（sAOD550 = 0.005，对流层顶锚定的指数尾，Ångström 指数 2.0），平流层廓线同时满足 20 公里与 25 公里消光系数和柱总量三条观测硬约束。太阳临边昏暗用 Allen V 波段二次律，均值归一。代价如实记录：平流层气溶胶的蓝坡加临边昏暗，把青带的红蓝比对比从分子大气的 0.715 冲淡到 0.814（raw sRGB 口径）。带变淡是物理，渲染没有补饱和。</p>
+
+    <h2 id="literature">与文献的三组对账</h2>
+
+    <h3>几何：Mallama 折射映射表</h3>
+    <p>解析折射映射（擦边高度对月面角距）与 Mallama 2021/2022 的表格逐行对照，中高空全程吻合在 2% 以内。这一条是模型的地基，对上之后颜色的径向位置才有资格谈。</p>
+
+    <h3>暗端：两个 clear-sky 模型差出几档</h3>
+    <p>我们的本影中心是 −15.1 档（默认物理，photopic），分子大气上限 −13.5 档。Mallama 的 clear-sky 经验消光模型给 −18.7 档（全盘积分）到 −20.5 档（盘面分辨 V 波段），且与正常月食的观测吻合。两个同样自称 clear-sky 的模型差出 3.6 到 5.4 档，说明 clear-sky 这个词在两边的口径不同：擦边光的斜程相当于 40 到 60 倍大气质量，消光标定上的微小差别会被放大几十倍。敏感性实验把分歧定位到切点高度 8 公里以下的深层光（它只控制暗端，对带的颜色和 ribbon 都没有影响），候选解释是那一层缺了未建模的消光，这是当前最大的开放项。诚实的结论：我们的暗端是最晴朗条件下的亮度上限，真实深食比它暗。</p>
+
+    <h3>颜色：Shu 2024 卫星窄带口径与 GOES-16</h3>
+    <p>红蓝比这个词在不同文献里至少有三种互不可换算的口径：渲染用的线性 sRGB 通道比、太阳谱归一后的透射比、卫星波段辐亮度直除（还要乘月面反照率比 1.35，系统不确定度正负 15%）。把口径摆齐之后的对账结果分两半。对上的一半：宽带的蓝化稳健，带内红蓝比与 GOES-16 实测同为 0.8 到 1.0 的淡青量级（注意两边口径仍不同，不构成严格定量吻合）。没对上的一半：Shu 2024 用高分四号测到的 R/B&lt;1 边界 ribbon（径向全宽 120 到 190 公里），我们的一维模型复现不出，臭氧造成的单层凹陷被 32′ 太阳盘卷积和本影红光流入抹平到噪声量级。敏感性矩阵排除了气溶胶参数和深层红光，剩下的候选按证据强度排：切点 8 到 19 公里的红肩消光缺失（对流层顶薄卷云，未建模）、卫星实际光谱响应、反照率系统项、二维边界测量对一维径向平均的口径差。没有为复现 ribbon 调过任何参数，开放项如实留档。</p>
+
+    <h2 id="numbers">关键数字（全部带口径）</h2>
+    <p>数字取自仓库里的 <code>docs/MODEL_CARD.md</code>，由 <code>band_profile.py --model-card</code> 生成：400 万光线乘 2000 个太阳子点，固定随机种子，默认物理为瑞利加臭氧加两组分背景气溶胶加太阳临边昏暗。物理代码任何变更后模型卡都会重新生成。</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>量</th><th>数值</th><th>口径</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>本影中心亮度</td><td>−15.1 档</td><td>photopic，0 档 = 未食满月，默认物理；独立管线交叉检验 −15.3 档，差异在中心三环的 Poisson 统计</td></tr>
+          <tr><td>本影中心亮度（分子上限）</td><td>−13.5 档</td><td>同上，但关掉气溶胶与临边昏暗：纯瑞利加臭氧的理论亮度上限</td></tr>
+          <tr><td>带最蓝处红蓝比</td><td>0.814（41.0′ 处）</td><td>raw sRGB 线性通道比，含实测太阳谱、无任何归一化，即渲染实际呈现的量；分子大气对照为 0.715（40.3′ 处）</td></tr>
+          <tr><td>亮度悬崖宽度</td><td>20.4′（46.7′ 到 67.1′）</td><td>photopic 面亮度从满月的 10% 升到 90%，即整个半影爬升段</td></tr>
+          <tr><td>本影边缘最陡坡度</td><td>1.8 档每角分</td><td>35′ 到 50′ 窗口，3 bin 平滑</td></tr>
+          <tr><td>中心 B / V / R 消光</td><td>16.6 / 11.8 / 9.2 mag</td><td>各波段带内归一（该带满月 = 0 mag），含约 4.6 mag 几何稀释；I 波段缺水汽与氧气吸收带，绝对值不引用</td></tr>
+          <tr><td>对照锚点</td><td>−18.7 到 −20.5 档</td><td>Mallama clear-sky 经验模型，分别为全盘积分与盘面分辨 V 波段；与本模型的差距是开放项</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="repro">每张正式图的复现命令</h2>
+    <p>仓库根目录执行，先 <code>source .venv/bin/activate</code>。完整光线追踪一次约几秒，视频渲染分钟级。</p>
+    <pre><code># 主页 hero：写实月食月盘（真光线追踪 LUT，默认 d=40'）
+python src/render_textured.py
+
+# 六步 ablation 序列（增强展示版 preview + 16bit 线性 TIFF）
+python src/render_ablation.py
+
+# 光度剖面曲线（固定 16M 光线分层抽样，页面版本即此输出）
+python scripts/render_photometric_profile.py
+
+# 对偶视角四联画视频（SDR + HDR）
+python src/build_video.py
+
+# 亮度悬崖两种曝光对比
+python src/diag_brightness_cliff.py
+
+# 模型卡（页面与上表所有数字的出处）
+python src/band_profile.py --model-card --n-rays 4000000
+
+# 物理不变量与渲染冒烟测试
+python -m pytest src/tests/ -v</code></pre>
+    <p>点源对圆盘的对比图由 <code>src/brute_ray_trace.py</code> 的圆盘光线追踪与其点源退化模式渲出；轨迹合成艺术图是一次性脚本的产物，构图参数记录在 <code>docs/working.md</code>。</p>
+
+    <h2>踩坑全记录在哪里</h2>
+    <p>这一页只讲了管线的最终形态，路上的弯路比这有意思得多。两个例子。其一，我们曾为修一个并不存在的 bug 发明过一条错误的折射公式，它把带拉到了看起来更符合直觉的位置，带着我修好了的自信在代码里活了一整天，直到与文献逐行对账才被识破、删除；错误的修正比错误本身更危险。其二，我们曾因为 CIELAB 色相角显示带偏蓝太多而差点去改物理，最后发现是度量本身在放大温和的偏蓝；色相对不上时，先怀疑度量，再怀疑物理。</p>
+    <div class="note">
+      <p>全部坑的根因和解法在仓库的 <a data-repo-doc="docs/PHYSICS_AND_PITFALLS.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/PHYSICS_AND_PITFALLS.md" style="color:var(--copper)">docs/PHYSICS_AND_PITFALLS.md</a>，逐日的工作记录与每次勘误在 <a data-repo-doc="docs/working.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/working.md" style="color:var(--copper)">docs/working.md</a>。文献出处：Mallama 2021/2022（arXiv:2112.08966）、Shu et al. 2024（Remote Sensing 16(22):4181）、Serdyuchenko et al. 2014 臭氧截面、AFGL 大气廓线、SAO2010 太阳谱。</p>
+    </div>
+  </main>
+
+  <footer>
+    <p><a href="index.html">← 返回主页</a> · 月食绿松石带 · 页面里是压缩预览，完整分辨率的图和视频可以用仓库里的命令自己生成。</p>
+  </footer>
+
+  <script>
+    const repoLinks = document.querySelectorAll("[data-repo-link]");
+    const repoDocs = document.querySelectorAll("[data-repo-doc]");
+    const pathRepo = location.hostname.endsWith("github.io") ? location.pathname.split("/").filter(Boolean)[0] : "";
+    const owner = location.hostname.endsWith("github.io") ? location.hostname.split(".")[0] : "grapeot";
+    if (pathRepo) {
+      repoLinks.forEach((link) => {
+        link.href = `https://github.com/${owner}/${pathRepo}`;
+      });
+      repoDocs.forEach((link) => {
+        link.href = `https://github.com/${owner}/${pathRepo}/blob/master/${link.dataset.repoDoc}`;
+      });
+    }
+  </script>
+</body>
+</html>

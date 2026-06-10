@@ -1,5 +1,7 @@
 # RFC：绿松石带计算管线的技术设计
 
+> **历史文档**：本文写于项目 scaffold 期（2026-05-31），记录当时的目标与设计。项目实际终点远超此范围（真·正向 ray tracing、对偶视角视频、ablation、HDR）。当前权威状态见 `working.md`（Key Technical Decisions）与 `MODEL_CARD.md`；对外结论层是 `README.md`。
+
 状态：草案 v0。这份文档定义 L0（色相曲线闭环）的计算管线，并为 L2（渲染）预留接口。
 
 ## 总体管线
