@@ -47,7 +47,7 @@ I(λ,h) = I_sun(λ) · exp(-τ_total(λ,h))
 
 ## 四、权威参考文献
 
-- Garcia-Munoz & Palle / Garcia-Munoz & Pesnell (Appl. Opt. 47, H149, 2008)：ray-trace + Rayleigh + ozone + aerosol → color，本问题的金标准交叉验证
+- Vollmer & Gedzelman (Appl. Opt. 47, H149, 2008)：ray-trace + Rayleigh + ozone + 真实卫星云场 → color，本问题的金标准交叉验证（注：旧版曾误归给 Garcia-Munoz；García Muñoz & Pallé 2011 是另一篇，在 JQSRT）
 - Palle et al. 2009：月食地球透射谱，Chappuis 带 0.375-0.650μm
 - ESO Messenger 143 (Fosbury & Koch 2011)：臭氧 Chappuis 给纯臭氧气体淡蓝色
 - 数据：臭氧 Serdyuchenko 2014；大气 AFGL US Standard；CMF CVRL CIE 1931 2°
