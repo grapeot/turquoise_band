@@ -1,4 +1,4 @@
-"""波段径向剖面 + R/B 口径统一 + 模型卡 —— 与文献可对账的量, 单一出处。
+"""【权威管线】波段径向剖面 + R/B 口径统一 + 模型卡 —— 与文献可对账的量, 单一出处。
 
 由暗端对账临时脚本(tmp/turquoise_critique/darkend/scripts/band_profiles.py)收编而来,
 物理与 raytrace_eclipse.forward_trace 完全同源(同撒线机制、同插值、同 seed 可复现),

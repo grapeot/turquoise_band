@@ -1,12 +1,20 @@
-"""L3 写实月食渲染：在 L2 物理月盘上叠加真实月面反照率纹理。
+"""【渲染应用】L3 写实月食渲染：在物理月盘上叠加真实月面反照率纹理。
 
 成像原理（与真实月食照片一致）：
     最终辐亮度 = 月面反照率(maria 暗 / highland 亮) × 折射阳光照明颜色
-折射阳光的颜色/亮度来自 render.py 的物理 LUT（角距→线性 XYZ，近本影中心红、
-中部绿松石、远侧白），月面反照率只调制亮度、不碰色相。两者在**线性**空间相乘，
+折射阳光的颜色/亮度（角距→线性 XYZ，近本影中心红、中部绿松石、远侧白）来自可选引擎
+（见下），月面反照率只调制亮度、不碰色相。两者在**线性**空间相乘，
 再走 render.py 既有的 tone-map + gamma 显示链。本模块不重新实现任何辐射传输或颜色管线。
 
-复用 render.py 的：build_lut / lookup_xyz / _tone_map_on_Y / _xyz_to_srgb_linear /
+着色引擎（engine 参数）：
+    - "raytrace"（默认）：权威物理管线的 a→XYZ LUT
+      （raytrace_eclipse.build_lut_from_raytrace：真折射 RK4 + z_tan 弯曲消光 + 撒线
+      focusing 涌现 + 半影直射光 + 气溶胶两组分 + 太阳 limb darkening，分层抽样，
+      与视频/ablation step6 同一套物理），查表用 render_rt.shade_disk_lut。
+    - "pointsource"：旧·点源分支表（render_rt.build_branch_tables/shade）。**该物理
+      已被项目判废**（点源近似 + 解析折射/聚焦，本影偏亮），仅保留作历史对照，勿用于新产出。
+
+复用 render.py 的：_tone_map_on_Y / _xyz_to_srgb_linear /
 _srgb_gamma / _box_downsample / _srgb_inv_gamma，以及几何常数 R_MOON_ARCMIN / R_UMBRA_ARCMIN。
 
 纹理方案（路径 a，真实贴图）：
@@ -127,25 +135,65 @@ def sample_albedo_orthographic(alb_tex, U, V, inside,
 
 
 # ============================================================
-# 2. 写实月盘渲染：反照率 × 物理食光，线性相乘 → tone-map
+# 2. 着色引擎：权威 ray tracing LUT（默认）/ 点源 legacy（已废，仅对照）
 # ============================================================
-def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
+def build_shader(engine="raytrace", lut=None, lut_kwargs=None):
+    """构建着色引擎。返回 (shade_fn, a_lo, tables)。
+
+    shade_fn(a) : 角距(arcmin, 任意 shape) → 线性 XYZ
+    a_lo        : 引擎覆盖的最小角距（"darks" 曝光标定用）
+    tables      : 引擎内部物理表（LUT dict 或分支表），原样进 info 供诊断
+
+    engine="raytrace"（默认）：raytrace_eclipse.build_lut_from_raytrace 的 a→XYZ LUT
+    （权威管线，与视频/ablation step6 同物理）+ render_rt.shade_disk_lut 查表。
+    lut 给定则直接用（复用已建 LUT），否则按 lut_kwargs 现建（默认 4M 光线，分钟级）。
+
+    engine="pointsource"：render_rt 点源分支表。物理已判废（本影偏亮），仅历史对照。
+    """
+    import render_rt
+    if engine == "raytrace":
+        if lut is None:
+            import raytrace_eclipse as rte
+            kw = dict(n_rays_b=4_000_000, n_sun=2000, n_h_nodes=500,
+                      n_pix=300, n_disp=12)
+            kw.update(lut_kwargs or {})
+            lut = rte.build_lut_from_raytrace(**kw)
+        shade_fn = lambda a: render_rt.shade_disk_lut(a, lut)
+        return shade_fn, float(lut["a"][0]), lut
+    elif engine == "pointsource":
+        tables = render_rt.build_branch_tables(n_h=8000)
+        shade_fn = lambda a: render_rt.shade(a, tables)
+        return shade_fn, float(tables["a_lo"]), tables
+    raise ValueError(f"未知 engine={engine!r}（可选 raytrace / pointsource）")
+
+
+# ============================================================
+# 3. 写实月盘渲染：反照率 × 物理食光，线性相乘 → tone-map
+# ============================================================
+def render_realistic_disk(d_arcmin=40.0, size=1400, margin_arcmin=3.0, ssaa=2,
                           sub_lat_deg=0.0, sub_lon_deg=0.0,
                           limb_power=0.5, target_srgb=0.12, bright_srgb=0.92,
                           expose_mode="faithful",
-                          dyn_gamma=1.0, chroma_weight=0.5, saturation=1.15,
+                          dyn_gamma=None, chroma_weight=0.5, saturation=None,
                           warm_wb=1.06, hdr_headroom=3.0,
                           add_starfield=True, add_grain=True,
+                          engine="raytrace", lut=None,
                           lut_kwargs=None, seed=7):
     """渲染写实月全食照片：真实月面反照率纹理 × 物理食光颜色。
 
     几何与 render.render_disk 同口径：本影中心为原点，月盘中心在 +x 距 d 处，
     月盘半径 R_MOON_ARCMIN(≈15.5')，本影半径 R_UMBRA_ARCMIN(≈41.2')。
-    默认 d=26'（食分≈0.99，月盘骑跨绿松石带：近本影中心侧红、中部绿松石、远侧趋白）。
+    默认 d=40'（圆盘/真 RT 物理下最蓝处过月盘中心，月盘横跨本影边界 41.2'：
+    近本影中心侧红、中部冷青带、远侧趋白）。
+
+    着色引擎见 build_shader：默认权威 ray tracing LUT；engine="pointsource" 为
+    已废点源物理，仅历史对照。dyn_gamma/saturation 缺省按引擎取记录值：
+    raytrace → 0.55/1.3（新 LUT 本影 −15 档，dyn_gamma=1.0 会让暗侧死黑无层次，
+    见 working.md 续11 与 2026-06-10 写实月盘）；pointsource → 1.0/1.15（历史默认）。
 
     管线
     ----
-    1) build_lut → lookup_xyz：每像素按到本影中心角距查得**线性** XYZ（物理食光颜色）。
+    1) shade_fn：每像素按到本影中心角距查得**线性** XYZ（物理食光颜色）。
     2) 正交投影采样月面反照率 alb（归一化的几何反照率）。
     3) 线性空间相乘：XYZ_scene = XYZ_phys × (alb/alb_ref) × limb_darkening。
        alb/alb_ref 把反照率归一到"高地≈1"，使整体亮度量级与原物理月盘一致，
@@ -155,9 +203,11 @@ def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
 
     返回 (rgb8, info)
     """
-    # 着色改用逐像素反向 RT（分支感知反查），根治 banding，无需 LUT 加密补丁。
-    import render_rt
-    tables = render_rt.build_branch_tables(n_h=8000)
+    if dyn_gamma is None:
+        dyn_gamma = 0.55 if engine == "raytrace" else 1.0
+    if saturation is None:
+        saturation = 1.3 if engine == "raytrace" else 1.15
+    shade_fn, a_lo, tables = build_shader(engine=engine, lut=lut, lut_kwargs=lut_kwargs)
     rng = np.random.default_rng(seed)
 
     # ---- 画幅：以月盘为中心，留余量给星空 ----
@@ -178,8 +228,8 @@ def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
     r_moon = np.hypot(U, V)
     inside = r_moon <= 1.0
 
-    # ---- 物理食光颜色（线性 XYZ，逐像素反向 RT，无 banding）----
-    XYZ_phys = render_rt.shade(a, tables)                 # (S,S,3)
+    # ---- 物理食光颜色（线性 XYZ，逐像素无 banding）----
+    XYZ_phys = shade_fn(a)                                # (S,S,3)
 
     # ---- 月面反照率 + 真实月面色偏（正交投影采样）----
     alb_tex, chroma_tex = load_albedo_texture()
@@ -214,8 +264,8 @@ def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
         exposure = t / (max(Y_bright, 1e-12) * (1.0 - t))
     else:
         # 为暗部曝光：红核侧标到中调（会把暗蓝带提亮显宽，见 diag_brightness_cliff）。
-        a_near = max(d_arcmin - R.R_MOON_ARCMIN, tables["a_lo"])
-        Y_dark = float(np.power(render_rt.shade(np.array([a_near]), tables)[0, 1], dyn_gamma))
+        a_near = max(d_arcmin - R.R_MOON_ARCMIN, a_lo)
+        Y_dark = float(np.power(shade_fn(np.array([a_near]))[0, 1], dyn_gamma))
         t = np.clip(R._srgb_inv_gamma(target_srgb), 1e-4, 0.999)
         exposure = t / (max(Y_dark, 1e-12) * (1.0 - t))
 
@@ -270,7 +320,9 @@ def render_realistic_disk(d_arcmin=47.0, size=1400, margin_arcmin=3.0, ssaa=2,
     # HDR 线性下采样（保留 >1）
     hdr_lin = R._box_downsample(rgb_hdr_lin, ssaa).astype(np.float32)
 
-    info = dict(tables=tables, exposure=float(exposure), d=d_arcmin,
+    info = dict(tables=tables, shade=shade_fn, engine=engine,
+                dyn_gamma=float(dyn_gamma),
+                exposure=float(exposure), d=d_arcmin,
                 R_moon=R.R_MOON_ARCMIN, R_umbra=R.R_UMBRA_ARCMIN,
                 extent=(x0, x1, y0, y1), cx_world=cx_world,
                 alb=alb, mu=mu, U=U, V=V, inside=inside, a_grid=a,
@@ -292,7 +344,7 @@ def _starfield(S, rng, density=0.00035, mag_lo=0.25, mag_hi=0.9):
 
 
 # ============================================================
-# 3. 自查
+# 4. 自查
 # ============================================================
 def self_check(info):
     """自查：(1) 月海暗斑是否可见 (2) 红/青/白三色是否仍在 (3) 反照率×颜色是否正确相乘。"""
@@ -311,12 +363,13 @@ def self_check(info):
           f"{'月海暗斑可见' if dark_frac > 0.08 else '月海不明显'}")
 
     # [2] 沿 O_umbra→O_moon 连线检查三色（用纯物理颜色，剥离反照率，确认色相未被破坏）
-    import render_rt
-    tables = info["tables"]
+    # 与渲染路径同口径：先做 dyn_gamma 亮度压缩（保色相）再统一曝光，否则曝光对不上。
     E = info["exposure"]
     xs = np.linspace(d - R_moon, d + R_moon, 400)
     a_line = np.abs(xs)
-    XYZ_line = render_rt.shade(a_line, tables)
+    XYZ_line = info["shade"](a_line)
+    Yl = np.maximum(XYZ_line[..., 1], 1e-30)
+    XYZ_line = XYZ_line / Yl[..., None] * np.power(Yl, info["dyn_gamma"])[..., None]
     rgb = R._srgb_gamma(np.clip(R._xyz_to_srgb_linear(R._tone_map_on_Y(XYZ_line, E)), 0, 1))
     Rc, Gc, Bc = rgb[:, 0], rgb[:, 1], rgb[:, 2]
     near_white = (Rc > 0.85) & (Gc > 0.85) & (Bc > 0.85)
@@ -401,21 +454,33 @@ def save_hdr_tiff(hdr_lin, path):
 if __name__ == "__main__":
     import time
     ap = argparse.ArgumentParser()
-    ap.add_argument("--d", type=float, default=47.0, help="月心到本影中心角距 arcmin（默认47，蓝带交界过月盘中心）")
+    ap.add_argument("--d", type=float, default=40.0,
+                    help="月心到本影中心角距 arcmin（默认40，最蓝处过月盘中心）")
+    ap.add_argument("--engine", choices=["raytrace", "pointsource"], default="raytrace",
+                    help="着色引擎：raytrace=权威 ray tracing LUT（默认）；"
+                         "pointsource=已废点源物理，仅历史对照")
     ap.add_argument("--size", type=int, default=1400)
     ap.add_argument("--ssaa", type=int, default=2)
     ap.add_argument("--sub-lat", type=float, default=0.0, help="盘心月面纬度（默认0，正面）")
     ap.add_argument("--sub-lon", type=float, default=0.0, help="盘心月面经度")
+    ap.add_argument("--dyn-gamma", type=float, default=None,
+                    help="物理亮度幂律压缩（缺省按引擎：raytrace 0.55 / pointsource 1.0）")
+    ap.add_argument("--saturation", type=float, default=None,
+                    help="饱和度（缺省按引擎：raytrace 1.3 / pointsource 1.15）")
     ap.add_argument("--no-stars", action="store_true")
     ap.add_argument("--no-grain", action="store_true")
     args = ap.parse_args()
 
+    if args.engine == "raytrace":
+        print("建真 ray tracing LUT（4M 光线，与视频/ablation step6 同物理，分钟级）...")
     t0 = time.time()
     rgb8, info = render_realistic_disk(
-        d_arcmin=args.d, size=args.size, ssaa=args.ssaa,
+        d_arcmin=args.d, size=args.size, ssaa=args.ssaa, engine=args.engine,
         sub_lat_deg=args.sub_lat, sub_lon_deg=args.sub_lon,
+        dyn_gamma=args.dyn_gamma, saturation=args.saturation,
         add_starfield=not args.no_stars, add_grain=not args.no_grain)
-    print(f"渲染 {args.size}x{args.size} (SSAA×{args.ssaa}) 用时 {time.time()-t0:.2f}s")
+    print(f"渲染 {args.size}x{args.size} (SSAA×{args.ssaa}, engine={args.engine}) "
+          f"用时 {time.time()-t0:.2f}s")
 
     ok = self_check(info)
     save_png(rgb8, info, os.path.join(OUT, "moon_realistic.png"))

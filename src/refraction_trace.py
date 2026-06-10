@@ -1,4 +1,4 @@
-"""真折射弯曲的数值积分 —— 替换 geometry.refraction_angle 的解析 α0·exp(-h/H)。
+"""【权威管线】真折射弯曲的数值积分 —— 替换 geometry.refraction_angle 的解析 α0·exp(-h/H)。
 
 零解析处方：折射率 n(z) 直接由真实 AFGL 密度廓线 atmosphere.n_air(z) 给出
     n(z) - 1 = KAPPA · N(z)      (N=数密度 cm^-3, 海平面 n-1 ≈ 2.7e-4)

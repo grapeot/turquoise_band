@@ -1,4 +1,7 @@
-"""导出月食视频所需的全部物理数据（引擎无关），供 Unreal/Blender/任意渲染器使用。
+"""【渲染应用】导出月食视频所需的全部物理数据（引擎无关），供 Unreal/Blender/任意渲染器使用。
+
+注意：月面食光颜色走 render_rt 点源 legacy 着色（导出当时的口径），与当前权威
+raytrace_eclipse LUT 有亮度/对比差异，重新导出时应换用 build_lut_from_raytrace。
 
 视频：360 帧，月心距本影中心 D 从 0→60 arcmin，左=月面、右=地球(站月面中心看)。
 

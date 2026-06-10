@@ -1,4 +1,11 @@
-"""逐像素反向 ray tracing 渲染（分支感知反查）—— 替换 LUT 查表，根治 banding。
+"""【解析对照/教学链 + LUT 着色器】点源反向 ray tracing 渲染（legacy）+ shade_disk_lut（权威 LUT 查表着色）。
+
+两个角色：
+- shade_disk_lut：a→XYZ LUT 的查表着色器，是**权威管线**（raytrace_eclipse.
+  build_lut_from_raytrace）的渲染出口，build_video / render_textured 默认引擎都走它。
+- build_branch_tables / shade：旧·点源分支感知反查着色（解析折射 + 解析聚焦）。
+  该物理已被真 ray tracing 判废（本影偏亮），仅保留作历史对照与教学
+  （render_textured --engine pointsource、diag_* 诊断脚本仍引用）。
 
 设计要点（见 docs，由架构 review 推导）：
 - banding 根因不是采样密度，是把**非单调**的 角距(h) 映射 argsort 压平、又在角距轴插颜色
@@ -101,69 +108,8 @@ def shade(a_pixel, t):
 
 
 # ============================================================
-# 1b. 太阳圆盘 ray tracing 着色（去点源近似）
+# 1b. 权威 LUT 查表着色（供 raytrace_eclipse.build_lut_from_raytrace 的 a→XYZ LUT 用）
 # ============================================================
-# 点源版 shade(a) 假设月面点只被单一擦边高度的一条光线照亮(反日轴单光线),
-# 太阳的 16' 角径靠 focusing 的 r_floor 软下限糊。这里真做：月面点 a 收到的光 =
-# 太阳圆盘(±ANG_SUN)各子点的折射光叠加。每个子点沿轴偏移 ξ → 落点平移 → 反查 h。
-# 含 focusing(能量守恒会聚, 修亮度悬崖), 不需 r_floor(圆盘有限大小天然正则化中心发散)。
-
-def _ang_sun_arcmin():
-    return float(np.degrees(np.arctan(g.R_SUN_KM / g.D_SUN_KM)) * 60.0)
-
-
-def build_disk_tables(n_h=8000, h_min=0.0, h_max=80.0, n_lam=401):
-    """太阳圆盘着色用的物理表：带符号落点角距 a_signed(h) + h→XYZ + h→focusing(无r_floor)。
-
-    a_signed 是带符号的(反日轴坐标, 可负=过轴), 圆盘积分要沿这条单调轴反查, 不能用
-    点源 shade 的 |a| 折叠。focusing 用 r_floor=0(不软下限), 圆盘积分自己正则化。
-    """
-    h = np.linspace(h_min, h_max, n_h)
-    lam = np.linspace(380, 780, n_lam)
-    I_sun = solar.solar_spectrum(lam)
-    white_XYZ = col.spectrum_to_XYZ(lam, I_sun); k = 1.0 / white_XYZ[1]
-    I = rt.emergent_spectrum(h, lam)
-    XYZ = np.array([col.spectrum_to_XYZ(lam, I[i]) for i in range(len(h))]) * k   # (H,3)
-
-    # 带符号落点角距(反日轴) r(h)=(R⊕+h)−α(h)·d_moon
-    r_signed_km = (g.R_EARTH + h) - g.refraction_angle(h) * g.D_MOON_KM
-    a_signed = np.degrees(np.arctan(r_signed_km / g.D_MOON_KM)) * 60.0           # (H,) 单调上升
-
-    # focusing 不用 r_floor(置极小), 让圆盘积分天然正则化中心发散
-    b = g.R_EARTH + h
-    dr_dh = 1.0 + g.refraction_angle(h) * g.D_MOON_KM / g.H_REFRAC_KM
-    foc = b / dr_dh / np.maximum(np.abs(r_signed_km), 1.0)                       # b·dh/dr/r, r_floor→1km
-
-    white = white_XYZ * k * (float(XYZ[-1, 1]) / max(white_XYZ[1] * k, 1e-9))    # 半影外正常月光
-    return dict(h=h, a_signed=a_signed, XYZ=XYZ, foc=foc, white=white,
-                ang_sun=_ang_sun_arcmin(), a_lo=float(a_signed.min()), a_hi=float(a_signed.max()))
-
-
-def build_disk_lut(n_h=300000, n_xi=257, bin_width=0.08, a_lo=18.0, a_hi=72.0):
-    """金标准圆盘 ray tracing 的 a→XYZ LUT(与 d 无关, 建一次全帧复用)。
-
-    复用 brute_ray_trace 的撒线+分箱(focusing从落点密度自然涌现), 得各角距 a 的积分 XYZ。
-    归一: 趋白外缘 Y→正常月光 1.0。返回 dict(a, XYZ, a_lo, a_hi) 供 shade_disk_lut 查。
-    """
-    import brute_ray_trace as bt
-    from scipy.ndimage import gaussian_filter1d
-    res = bt.brute_trace(n_h=n_h, n_xi=n_xi, bin_width=bin_width,
-                         a_grid_lo=a_lo, a_grid_hi=a_hi)
-    a = res["a"]; XYZ = res["XYZ"].copy(); Y = res["Y"].copy()
-    for c in range(3):
-        XYZ[:, c] = gaussian_filter1d(XYZ[:, c], sigma=2.0)   # 消分箱噪声(banding artifact)
-    yref = np.percentile(XYZ[Y > 0, 1], 99)
-    XYZ = XYZ / max(yref, 1e-9); Yn = XYZ[:, 1]
-
-    # 修边界外虚假衰减: 暴力撒线在大a端(本影外/半影外)落点密度不足→Y虚降(a=70只0.53),
-    # 但物理上 a>本影边界 = 直射正常月光(最亮~1, 不衰减)。亮度峰值位置≈本影边界,
-    # 峰值之后 clamp 到正常月光白(峰值处的XYZ), 消除"月盘右缘虚假阴影"(D=60末帧bug)。
-    i_peak = int(np.argmax(Yn))
-    white = XYZ[i_peak].copy()                          # 峰值处=趋白正常月光
-    XYZ[i_peak:] = white                                # 峰值外全部=正常月光白(不衰减)
-    return dict(a=a, XYZ=XYZ, a_lo=float(a[0]), a_hi=float(a[-1]), white=white)
-
-
 def shade_disk_lut(a_pixel, lut):
     """按角距查圆盘 LUT → 线性 XYZ。超 a_hi=趋白正常月光(直射), 低于内缘=深本影(LUT给)。"""
     a = np.asarray(a_pixel, dtype=float)
@@ -172,41 +118,6 @@ def shade_disk_lut(a_pixel, lut):
         out[..., c] = np.interp(a, lut["a"], lut["XYZ"][:, c],
                                 left=lut["XYZ"][0, c], right=lut["XYZ"][-1, c])
     return out
-
-
-def shade_disk(a_pixel, t, n_xi=257):
-    """太阳圆盘 ray tracing 着色：像素角距 a(任意shape) → 圆盘积分线性 XYZ(含focusing)。
-
-    对每个月面点 a, 积分太阳圆盘各子点 ξ∈[-ang_sun, ang_sun](弦长加权, 均匀盘):
-      子点 ξ 的折射光落点要求 a_signed(h)=a−ξ → 反查 h → XYZ(h)·foc(h)。
-      落点超 a_hi(高空外): 不经大气=直射日光(白); 落点 < a_lo: 无光(被地球挡)。
-    """
-    a = np.asarray(a_pixel, dtype=float)
-    shp = a.shape
-    af = a.ravel()[:, None]                                   # (P,1)
-    xi = np.linspace(-t["ang_sun"], t["ang_sun"], n_xi)[None, :]   # (1,X)
-    w = np.sqrt(np.clip(t["ang_sun"]**2 - xi**2, 0, None))   # 弦长权重(均匀盘1D投影)
-    w = w / max(w.sum(), 1e-12)
-    target = af - xi                                          # (P,X) 各子点要求落点角距
-
-    # 反查 h: a_signed 单调上升 → 插值得 h_idx, 取 XYZ·foc
-    a_sig = t["a_signed"]; XYZ = t["XYZ"]; foc = t["foc"]
-    tgt_cl = np.clip(target, a_sig[0], a_sig[-1])
-    idx = np.searchsorted(a_sig, tgt_cl).clip(1, len(a_sig)-1)
-    a0 = a_sig[idx-1]; a1 = a_sig[idx]
-    fr = (tgt_cl - a0) / np.maximum(a1 - a0, 1e-9)
-    XYZf = XYZ * foc[:, None]                                 # (H,3) 预乘focusing
-    col_lo = XYZf[idx-1]; col_hi = XYZf[idx]                  # (P,X,3)
-    contrib = col_lo * (1 - fr)[..., None] + col_hi * fr[..., None]
-
-    # 落点超 a_hi: 直射白(不经大气); 落点 < a_lo: 无光(被挡置0)
-    over = target > t["a_hi"]
-    under = target < t["a_lo"]
-    contrib = np.where(over[..., None], t["white"][None, None, :], contrib)
-    contrib = np.where(under[..., None], 0.0, contrib)
-
-    out = (contrib * w[..., None]).sum(axis=1)               # (P,3) 圆盘加权积分
-    return out.reshape(*shp, 3)
 
 
 # ============================================================

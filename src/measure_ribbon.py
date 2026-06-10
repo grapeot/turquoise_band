@@ -1,4 +1,9 @@
-"""Reproduce the literature (Shu et al. 2024, RemoteSens 16(22):4181) turquoise-band
+"""【legacy 口径工具】复现 Shu et al. 2024 的 ribbon 宽度测量几何（已被 src/band_profile.py 取代）。
+
+R/B 口径统一与文献对账请用 band_profile（三口径显式分解 + 模型卡）；本模块保留作
+点源 legacy 着色下的历史测量记录，勿用于新对账。
+
+Reproduce the literature (Shu et al. 2024, RemoteSens 16(22):4181) turquoise-band
 ribbon-width measurement geometry, on OUR physics.
 
 Literature definition (verified):

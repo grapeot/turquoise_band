@@ -33,11 +33,11 @@
 ```bash
 source .venv/bin/activate
 python src/raytrace_eclipse.py         # 真·正向 ray tracing（权威管线，~3s）
-python -m pytest src/tests/ -v         # 10 个物理不变量测试（含 slow）
-python src/render_textured.py          # 写实月盘（注意：默认仍走点源旧引擎，待迁移）
+python -m pytest src/tests/ -v         # 物理不变量 + 渲染冒烟测试（含 slow，~2min）
+python src/render_textured.py          # 写实月盘（默认 d=40、权威 ray tracing LUT；--engine pointsource 仅历史对照）
 python src/diag_composite.py           # 蓝带宽度诊断
 python src/pipeline.py --self-check    # L0 色相曲线
-bash scripts/make_hdr.sh               # 出 HDR HEIC（依赖 sibling repo YabiVision）
+bash scripts/make_hdr.sh               # 出 HDR HEIC（需 HDR_REFERENCE_HEIC 指向任一 iPhone 实拍 HEIC）
 ```
 
 ## 文档

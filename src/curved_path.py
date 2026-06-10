@@ -1,4 +1,4 @@
-"""真·弯曲光路上的消光积分 —— 替换 geometry.column_density 的直线近似。
+"""【权威管线】真·弯曲光路上的消光积分 —— 替换 geometry.column_density 的直线近似。
 
 物理图景
 ========

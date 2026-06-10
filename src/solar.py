@@ -1,4 +1,4 @@
-"""入射谱：大气外太阳辐照谱。默认用实测 SAO2010 (Chance & Kurucz 2010)，回退 5772K 黑体。"""
+"""【共享基础】入射谱：大气外太阳辐照谱。默认用实测 SAO2010 (Chance & Kurucz 2010)，回退 5772K 黑体。"""
 import os
 import numpy as np
 

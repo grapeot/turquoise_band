@@ -1,4 +1,4 @@
-"""Ablation study 逐层渲染：6 步从最土到真实，每步加一个物理因素。
+"""【渲染应用】Ablation study 逐层渲染：6 步从最土到真实，每步加一个物理因素。
 
 叙事张力排序(见 docs/ablation_plan.md):
   1 土圆盘+纹理  2 几何遮挡(黑白)  3 瑞利(血月红)  4 臭氧(绿松石带)
@@ -55,7 +55,7 @@ def _build_lut_pointsource(**kw):
 
 
 def _build_lut_disk(n_disp=1, solar_mode="real"):
-    """圆盘 a→XYZ LUT(金标准 brute_trace)。分箱有蒙特卡洛统计噪声→高分辨率渲染可见banding,
+    """圆盘 a→XYZ LUT(解析对照 brute_trace, 曾称"金标准")。分箱有蒙特卡洛统计噪声→高分辨率渲染可见banding,
     用高斯平滑(sigma=2bins≈0.16', 远小于绿松石带4'尺度)消噪不损物理(最蓝R/B不变)。"""
     from scipy.ndimage import gaussian_filter1d
     res = bt.brute_trace(n_h=200000, n_xi=257, bin_width=0.08,
