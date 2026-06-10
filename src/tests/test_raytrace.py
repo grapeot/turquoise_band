@@ -75,15 +75,48 @@ def test_blue_attenuated_more_than_red():
     assert tau[0] > tau[1], f"蓝 τ={tau[0]:.2f} 应 > 红 τ={tau[1]:.2f}"
 
 
+# ── 气溶胶与太阳 limb darkening ───────────────────────────────────────────
+def test_aerosol_profile_integral():
+    """气溶胶垂直 AOD = aod550_trop + aod550_strat(廓线归一正确)。"""
+    import atmosphere as atm
+    z = np.linspace(0.0, 90.0, 200_000)
+    aod = np.trapezoid(atm.beta_aerosol_550(z, aod550_trop=0.07, aod550_strat=0.005), z)
+    assert abs(aod - 0.075) < 1e-3, f"垂直 AOD={aod:.4f} 应≈0.075"
+
+
+def test_aerosol_hits_deep_rays_not_band():
+    """气溶胶对低切点光线是一阶项(数 mag), 对绿松石带高度(z_tan≥16km)几乎无影响。"""
+    lam = np.array([550.0])
+    kw = dict(aod550_trop=0.07, aod550_strat=0.005)
+    d_low = (cp.tau_curved(2.0, lam, **kw)[0][0] - cp.tau_curved(2.0, lam)[0][0])
+    d_band = (cp.tau_curved(20.0, lam, **kw)[0][0] - cp.tau_curved(20.0, lam)[0][0])
+    mag = 2.5 / np.log(10)
+    assert d_low * mag > 1.0, f"z_tan=2km 气溶胶应加深 >1 mag, 实测 {d_low*mag:.2f}"
+    assert d_band * mag < 0.5, f"z_tan=20km 气溶胶应 <0.5 mag(仅平流层 Junge 层), 实测 {d_band*mag:.2f}"
+
+
+def test_limb_darkening_weights():
+    """LD 权重: 盘心>盘缘、归一均值=1(总通量守恒)、盘缘 ≈0.30/⟨I⟩。"""
+    mu = np.array([1.0, 0.5, 0.0])
+    w = 1.0 - 0.93 * (1.0 - mu) + 0.23 * (1.0 - mu) ** 2
+    assert w[0] > w[1] > w[2] > 0, "LD 应随 μ 单调"
+    assert abs(w[2] - 0.30) < 0.01, "盘缘 I/I0 应≈0.30 (Allen V 带二次律)"
+
+
 # ── 集成: 本影中心档数 + 绿松石带(慢, 标记 slow) ────────────────────────────
 @pytest.mark.slow
 def test_umbra_center_dark():
-    """真 ray tracing 本影中心应暗到逼近真实(-12~-15 档, 远暗于解析版 -7.7)。"""
+    """本影中心档数: 分子大气上限 ≈-13.5; 默认(背景气溶胶+LD) ≈-15。
+    对照: Mallama 2022 经验消光模型 disk-resolved V -20.5 档(其 O3/气溶胶按分子
+    air mass 等比放大, 对深擦边光偏深; 真值介于两者, 见 2026-06-09 暗端对账 VERDICT)。"""
     import raytrace_eclipse as rte
-    r = rte.forward_trace(n_rays_b=1_000_000, n_sun=800, n_h_nodes=300,
-                          n_pix=200, n_disp=6, verbose=False)
-    cs = r["center_stops"]
-    assert -16 < cs < -11, f"本影中心 {cs:.1f} 档不在 -16~-11(应逼近真实, 远暗于解析 -7.7)"
+    kw = dict(n_rays_b=1_000_000, n_sun=800, n_h_nodes=300,
+              n_pix=200, n_disp=6, verbose=False)
+    cs_mol = rte.forward_trace(aod550_trop=0, aod550_strat=0, limb_dark=False, **kw)["center_stops"]
+    assert -15 < cs_mol < -12, f"分子大气上限 {cs_mol:.1f} 档不在 -15~-12(基准 -13.5)"
+    cs = rte.forward_trace(**kw)["center_stops"]
+    assert -17 < cs < -13.5, f"默认(气溶胶+LD) {cs:.1f} 档不在 -17~-13.5(基准 -15.1)"
+    assert cs < cs_mol - 0.8, "气溶胶+LD 应比分子上限至少暗 0.8 档"
 
 
 @pytest.mark.slow

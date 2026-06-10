@@ -71,3 +71,20 @@ if __name__ == "__main__":
     assert n_o3(22) > n_o3(0) and n_o3(22) > n_o3(60), "臭氧应在平流层峰值"
     assert n_air(0) > n_air(60), "空气密度应随高度下降"
     print("自查通过：臭氧层峰值在平流层，空气密度随高度衰减。")
+
+
+def beta_aerosol_550(z_km, aod550_trop=0.07, h_trop_km=1.5,
+                     aod550_strat=0.005, z_strat_km=20.0, w_strat_km=2.5):
+    """背景气溶胶 550nm 消光系数 β(z) (km⁻¹)。垂直积分 = aod550_trop + aod550_strat。
+
+    对流层：指数廓线 exp(-z/H)，H≈1.5km——边界层+自由对流层的"最晴夜"背景
+    （Mallama 2022 恒星测光经验消光 E_green=0.20 mag/airmass 里隐含的 ~0.06 mag/am
+    主要就是它）。平流层：Junge 层高斯（z≈20km，火山静默期 AOD≈0.005）。
+    波长依赖 (λ/550nm)^(−1.3)（Ångström α=1.3）由调用方乘。
+    背景值出处：GloSSAC/AERONET 静默期共识 AOD550 0.05-0.10；见 2026-06-09 暗端对账。
+    """
+    z = np.asarray(z_km, dtype=float)
+    beta_t = (aod550_trop / h_trop_km) * np.exp(-np.clip(z, 0.0, None) / h_trop_km)
+    g = np.exp(-0.5 * ((z - z_strat_km) / w_strat_km) ** 2)
+    beta_s = aod550_strat * g / (w_strat_km * np.sqrt(2.0 * np.pi))
+    return beta_t + beta_s

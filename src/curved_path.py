@@ -65,7 +65,7 @@ def _path_factor(r_km, L, with_refraction=True):
 
 
 def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
-               with_refraction=True):
+               with_refraction=True, aod550_trop=0.0, aod550_strat=0.0):
     """沿真实弯曲光路积分光学厚度 τ(λ)。
 
     参数
@@ -74,6 +74,9 @@ def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
     lam_nm       : 波长数组 nm
     z_top_km     : 大气上界(此上消光可忽略) km
     with_refraction : True=真实弯曲路径; False=直线对照(n≡1)
+    aod550_trop / aod550_strat : 背景气溶胶垂直 AOD@550nm(对流层指数/平流层 Junge 层),
+        0=纯分子大气(理论亮度上限)。波长依赖 (λ/550)^(−1.3)。权威管线默认开
+        (见 raytrace_eclipse), 本函数默认 0 保持旧调用方语义。
     返回 τ(λ), 形状同 lam_nm。已含切点两侧对称(×2)。
 
     数值: 径向网格在切点附近用 sqrt 间距加密(那里 1/cos ψ 近奇异, 可积但需细)。
@@ -117,6 +120,14 @@ def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
     sig_ray = cross_sections.sigma_rayleigh(lam)
     sig_o3 = cross_sections.sigma_o3(lam)
     tau = N_air * sig_ray + N_o3 * sig_o3
+
+    if aod550_trop > 0.0 or aod550_strat > 0.0:
+        beta_aer = atmosphere.beta_aerosol_550(z, aod550_trop=aod550_trop,
+                                               aod550_strat=aod550_strat)
+        # β 单位 km^-1, 沿路径积分直接得 550nm 光学厚度(无需 cm 换算)
+        tau_aer_550 = 2.0 * np.trapezoid(beta_aer * pf * dr_du, dx=du)
+        tau = tau + tau_aer_550 * (lam / 550.0) ** (-1.3)
+
     return tau, N_air, N_o3
 
 

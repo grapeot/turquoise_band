@@ -87,7 +87,8 @@ def _precompute_alpha_traced(h_nodes, ds_km=0.02, z_top_km=120.0):
 
 
 def _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0, n_steps=4000,
-                                z_tan_nodes=None, blocked_nodes=None):
+                                z_tan_nodes=None, blocked_nodes=None,
+                                aod550_trop=0.0, aod550_strat=0.0):
     """在 h 网格上预计算沿真实弯曲路径的出射谱 I(λ,h)=I_sun·exp(-τ_curved)。
 
     τ 用 curved_path.tau_curved（Bouguer 弯曲光路），替换直线柱密度。
@@ -105,7 +106,9 @@ def _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0, n_steps=4000,
         if blocked_nodes is not None and blocked_nodes[i]:
             continue
         tau, _, _ = cp.tau_curved(float(h_tan[i]), lam, z_top_km=z_top_km,
-                                  n_steps=n_steps, with_refraction=True)
+                                  n_steps=n_steps, with_refraction=True,
+                                  aod550_trop=aod550_trop,
+                                  aod550_strat=aod550_strat)
         I_emerg[i] = I_sun * np.exp(-tau)
     return I_emerg
 
@@ -126,6 +129,11 @@ def forward_trace(
                             # 必须 ≥ d·tan(a_max+16')−R_e, 否则月面外缘有太阳子点的直射光
                             # 没被撒出来→亮度假性下降(采样截断, 非物理)。a=73' 需 ≥3600,
                             # 取 5500 留余量(73.2' 处实测精确回到满月 1.000)。
+    aod550_trop=0.07,       # 背景气溶胶(对流层, H=1.5km)。0=纯分子大气理论上限(比任何真实
+    aod550_strat=0.005,     # 月食都亮 ~2-3 mag); 0.07+0.005=最晴夜背景(GloSSAC/AERONET 静默期,
+                            # 与 Mallama 恒星测光经验消光隐含值一致)。见 2026-06-09 暗端对账。
+    limb_dark=True,         # 太阳 limb darkening(V 带二次律, Allen)。盘边缘 I≈0.30·I(0),
+                            # 权重归一均值=1 总通量守恒。False=均匀盘(旧行为, ablation 用)。
     seed=0,
     verbose=True,
 ):
@@ -154,7 +162,9 @@ def forward_trace(
     I_emerg = _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0,
                                           n_steps=tau_steps,
                                           z_tan_nodes=z_tan_nodes,
-                                          blocked_nodes=blocked_nodes)
+                                          blocked_nodes=blocked_nodes,
+                                          aod550_trop=aod550_trop,
+                                          aod550_strat=aod550_strat)
 
     # ---- 满月白点：未衰减日光 XYZ，k_white=1/Y_white → 满月 Y=1 ----
     I_sun_full = solar.solar_spectrum(lam)
@@ -196,6 +206,16 @@ def forward_trace(
         ys.extend(v[m].tolist())
     xi_x = np.array(xs[:n_sun]); xi_y = np.array(ys[:n_sun])
     sun_dx = xi_x * D_MOON; sun_dy = xi_y * D_MOON
+
+    # ---- 太阳 limb darkening 权重 ----
+    # V 带二次律 I(μ)/I(0)=1−0.93(1−μ)+0.23(1−μ)² (Allen, ~550nm), 盘边缘 ≈0.30。
+    # 经验归一(均值=1)→总通量精确守恒, 只改盘内分布。消色差近似(色差是二阶)。
+    if limb_dark:
+        mu = np.sqrt(np.clip(1.0 - (xi_x ** 2 + xi_y ** 2) / ang_sun ** 2, 0.0, 1.0))
+        w_ld = 1.0 - 0.93 * (1.0 - mu) + 0.23 * (1.0 - mu) ** 2
+        w_ld = w_ld / w_ld.mean()
+    else:
+        w_ld = np.ones(n_sun)
 
     # ---- 月面 2D 网格 ----
     edges = np.linspace(-grid_half_km, grid_half_km, n_pix + 1)
@@ -244,6 +264,7 @@ def forward_trace(
 
         si = rng.integers(0, n_sun, size=m)
         sdx = sun_dx[si]; sdy = sun_dy[si]
+        wl = w_ld[si]                      # 该光线所属太阳子点的 limb darkening 权重
 
         # 亮度: 折射光查 Y_full_nodes(消光后); 直射光=满月白 Y=1(不衰减)
         Yray = np.where(direct, white_XYZ_direct[1], np.interp(h, h_nodes, Y_full_nodes))
@@ -260,13 +281,13 @@ def forward_trace(
             iy = np.floor((y_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
             inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
             flat = ix[inside] * n_pix + iy[inside]
-            hh = h[inside]; dir_in = direct[inside]
+            hh = h[inside]; dir_in = direct[inside]; wl_in = wl[inside]
             for c in range(3):
                 # 折射光: 查该段消光后 XYZ; 直射光: 满谱白的该段份额(满谱/n_disp, 平摊到各段)
                 Xc = np.interp(hh, h_nodes, XYZ_b[:, c])
                 Xc = np.where(dir_in, white_XYZ_direct[c] / len(bands), Xc)
                 XYZ_grid[:, :, c].reshape(-1)[:] += np.bincount(
-                    flat, weights=Xc * ray_flux, minlength=npix2)
+                    flat, weights=Xc * wl_in * ray_flux, minlength=npix2)
 
         # ---- 全谱亮度落点（用 ref 折射，无色散位移）：亮度档数主结果 ----
         r_land = b_mag - alpha0 * D_MOON
@@ -277,7 +298,8 @@ def forward_trace(
         inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
         flat = ix[inside] * n_pix + iy[inside]
         npix2 = n_pix * n_pix
-        Y_grid.reshape(-1)[:] += np.bincount(flat, weights=Yray[inside] * ray_flux, minlength=npix2)
+        Y_grid.reshape(-1)[:] += np.bincount(
+            flat, weights=(Yray * wl)[inside] * ray_flux, minlength=npix2)
         cnt_grid.reshape(-1)[:] += np.bincount(flat, minlength=npix2)
 
     # ---- 面亮度 = 每像素累加通量 / 像素面积（相对满月）----
