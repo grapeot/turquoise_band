@@ -786,3 +786,11 @@ yage.ai/share/eclipse/, 全部 200。
   无 NaN/暗心亮边量级 + render_textured 默认引擎小图冒烟 + pointsource legacy 可构建)。
 - AGENTS.md 补代码地图(四层角色)/入口与测试/文档路由, 删过期 MPS 声称；README
   复现命令区同步(render_textured 默认引擎、HDR 模板环境变量)。
+
+### 2026-06-10（续4）— 公开发布: 历史重写 + GitHub Pages 上线
+
+发布前用 git-filter-repo 重写历史: 移除大渲染产物(37MB mov、7×11MB ablation TIFF、npz,
+均可重生成)与调研抓取缓存(.tmp/tmp), 第三方人名匿名化。.git 121M→47M。
+**注意: 本文件此前各条目引用的 commit hash 是重写前的, 已不可直接 checkout**;
+重写前完整历史有本地 bundle 备份。GitHub: grapeot/turquoise_band(public, master),
+Pages = master /docs(index.html 主页 + principles.html 原理深读)。
