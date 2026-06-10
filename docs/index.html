@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="月全食边缘有一条青色的窄带，叫绿松石带。我们用实测大气数据和光线追踪把它算了出来，再把臭氧等机制逐个开关，看这条带为什么在那、为什么那么淡、为什么那么窄。">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="月食绿松石带 · 把那条青色的带算出来">
+  <meta property="og:description" content="月全食边缘有一条青色的窄带，叫绿松石带。我们用实测大气数据和光线追踪把它算了出来，再把臭氧等机制逐个开关，看这条带为什么在那、为什么那么淡、为什么那么窄。">
+  <meta property="og:url" content="https://grapeot.github.io/turquoise_band/">
+  <meta property="og:image" content="https://grapeot.github.io/turquoise_band/assets/hero_moon_rt.jpg">
+  <meta name="twitter:card" content="summary_large_image">
   <title>月食绿松石带 · 把那条青色的带算出来</title>
   <style>
     :root {
@@ -80,6 +86,8 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      padding: 10px;
+      margin: -10px;
       font-weight: 700;
       letter-spacing: 0.03em;
     }
@@ -129,6 +137,7 @@
       width: min(var(--max), calc(100% - 32px));
       margin: 0 auto;
       padding: 88px 0;
+      scroll-margin-top: 24px;
     }
 
     .hero {
@@ -155,24 +164,28 @@
     h3 {
       margin: 0;
       line-height: 1.14;
-      letter-spacing: -0.03em;
+    }
+
+    h1,
+    h2 {
+      text-wrap: balance;
     }
 
     h1 {
       max-width: 780px;
       font-size: clamp(40px, 6.4vw, 84px);
-      font-weight: 780;
+      font-weight: 700;
     }
 
     h2 {
       max-width: 820px;
       font-size: clamp(30px, 4.6vw, 54px);
-      font-weight: 760;
+      font-weight: 700;
     }
 
     h3 {
       font-size: 22px;
-      font-weight: 720;
+      font-weight: 600;
     }
 
     .lead {
@@ -200,7 +213,7 @@
       border: 1px solid var(--line);
       background: rgba(255, 255, 255, 0.04);
       color: var(--text);
-      font-weight: 650;
+      font-weight: 600;
     }
 
     .button.primary {
@@ -281,6 +294,10 @@
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.026));
     }
 
+    .copy {
+      max-width: 760px;
+    }
+
     .card p,
     .copy p,
     .note p {
@@ -328,10 +345,16 @@
       margin-top: 8px;
     }
 
+    .slice-hint {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
     .step-slices {
       display: grid;
       gap: 8px;
-      margin-top: 18px;
+      margin-top: 8px;
     }
 
     .step-slice {
@@ -371,6 +394,10 @@
       filter: saturate(1) brightness(1.05);
     }
 
+    .step-slice[data-level="4"].active {
+      border-color: rgba(143, 210, 201, 0.78);
+    }
+
     .slice-meta {
       position: relative;
       z-index: 1;
@@ -391,7 +418,7 @@
     }
 
     .slice-title {
-      font-weight: 740;
+      font-weight: 600;
       font-size: 16px;
     }
 
@@ -444,6 +471,10 @@
 
     .pair figure {
       margin: 0;
+    }
+
+    .pair a {
+      display: block;
     }
 
     .pair img {
@@ -511,8 +542,17 @@
       font-size: 14px;
     }
 
+    .footer-nav a {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .footer-nav a:hover {
+      color: var(--text);
+    }
+
     @media (max-width: 900px) {
-      .nav a:not(.repo-link) {
+      .nav a.hide-mobile {
         display: none;
       }
 
@@ -558,8 +598,16 @@
         min-height: 58px;
       }
 
-      .brand span {
+      .brand-text {
         display: none;
+      }
+
+      .plate-caption {
+        position: static;
+        margin: 0;
+        border: 0;
+        border-top: 1px solid var(--line);
+        border-radius: 0;
       }
 
       .slice-meta {
@@ -575,14 +623,14 @@
     <div class="topbar-inner">
       <a class="brand" href="#top" aria-label="回到顶部">
         <span class="brand-mark" aria-hidden="true"></span>
-        <span>月食绿松石带</span>
+        <span class="brand-text">月食绿松石带</span>
       </a>
       <nav class="nav" aria-label="页面导航">
-        <a href="#hook">饱和蓝之谜</a>
-        <a href="#ablation">六步推演</a>
-        <a href="#dual">对偶视角</a>
-        <a href="#cliff">亮度悬崖</a>
-        <a href="#boundary">科学边界</a>
+        <a class="hide-mobile" href="#hook">饱和蓝之谜</a>
+        <a class="hide-mobile" href="#ablation">六步推演</a>
+        <a class="hide-mobile" href="#dual">对偶视角</a>
+        <a class="hide-mobile" href="#cliff">亮度悬崖</a>
+        <a class="hide-mobile" href="#boundary">科学边界</a>
         <a href="principles.html">原理</a>
         <a class="repo-link" data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub 仓库</a>
       </nav>
@@ -648,11 +696,12 @@
       <p class="eyebrow">核心实验 · 每步只加一个机制</p>
       <h2 id="ablation-title">六步，把绿松石带一层层算出来。</h2>
       <div class="controls">
-        <p class="note-copy">从一个土圆盘开始，每一步往模型里加一个真实的物理机制，看月盘怎么一步步变成月食的样子。这套逐步开关还附带一个照片给不了的能力：反事实归因。第四步加了臭氧、青带出现；退回第三步等于把臭氧关掉，带就没了。六张图共用同一组对比度增强参数，方便看清每步差异；忠实曝光的版本在亮度悬崖一节。点按任意一步切换。</p>
+        <p class="note-copy">从一个土圆盘开始，每一步往模型里加一个真实的物理机制，看月盘怎么一步步变成月食的样子。这套逐步开关还附带一个照片给不了的能力：反事实归因。第四步加了臭氧、青带出现；退回第三步等于把臭氧关掉，带就没了。六张图共用同一组对比度增强参数，方便看清每步差异；忠实曝光的版本在亮度悬崖一节。</p>
         <div class="step-explorer">
           <div>
             <h3 id="stepName">第 1 步：一个土圆盘</h3>
             <p class="step-current" id="stepCopy" aria-live="polite"></p>
+            <p class="slice-hint">↓ 点按任意一步，右图随之切换</p>
             <div class="step-slices" id="stepSlices" role="group" aria-label="六步机制选择"></div>
           </div>
           <figure class="step-viewer">
@@ -669,6 +718,7 @@
       <div class="media-card">
         <video controls playsinline preload="metadata" poster="assets/eclipse_video_poster.jpg">
           <source src="assets/eclipse_video_preview.mp4" type="video/mp4">
+          <p style="margin:16px; color:#d3c8bc">浏览器不支持内嵌视频，可<a href="assets/eclipse_video_preview.mp4" style="text-decoration:underline">直接下载观看</a>。</p>
         </video>
         <div class="media-body">
           <h3>月球穿过本影的四联画</h3>
@@ -691,12 +741,12 @@
       </div>
       <div class="pair">
         <figure>
-          <img src="assets/moon_brightness_cliff.png" alt="两种曝光策略的对比：为暗部曝光时蓝带显得占据大半月盘，忠实亮度下蓝带收窄成细带；下方曲线显示红蓝比与亮度沿月盘的变化" width="1476" height="1005" loading="lazy">
-          <figcaption>同一套物理、两种曝光。左：为暗部曝光，蓝区被提亮、显得很宽。右：按月盘最亮处定标的忠实曝光，蓝带因为暗而被亮区盖过，收窄成细带，对上文献和真实照片。下方曲线：红蓝比（紫）平滑渐变，亮度（橙）在带的位置恰好是低谷。</figcaption>
+          <a href="assets/moon_brightness_cliff.png" target="_blank" rel="noopener"><img src="assets/moon_brightness_cliff.png" alt="两种曝光策略的对比：为暗部曝光时蓝带显得占据大半月盘，忠实亮度下蓝带收窄成细带；下方曲线显示红蓝比与亮度沿月盘的变化" width="1476" height="1005" loading="lazy"></a>
+          <figcaption>同一套物理、两种曝光。左：为暗部曝光，蓝区被提亮、显得很宽。右：按月盘最亮处定标的忠实曝光，蓝带因为暗而被亮区盖过，收窄成细带，对上文献和真实照片。下方曲线：红蓝比（紫）平滑渐变，亮度（橙）在带的位置恰好是低谷。点图可在新标签查看大图。</figcaption>
         </figure>
         <figure>
-          <img src="assets/photometric_profile.png" alt="月食光度剖面：从本影中心约负15.5档平缓爬升，41角分处陡升，73角分到达满月0档" width="1200" height="1200" loading="lazy">
-          <figcaption>光线追踪给出的光度剖面（0 档 = 未食满月）。本影内是折射光的平缓斜坡，41′ 本影边界附近陡升，半影里直射光渐入、平滑爬到 73′ 的满月。图中曲线为 1600 万条光线的分层抽样跑，中心读 −15.5 档；模型卡基准跑（400 万光线）为 −15.1 档，差异来自中心几环的统计涨落。</figcaption>
+          <a href="assets/photometric_profile.png" target="_blank" rel="noopener"><img src="assets/photometric_profile.png" alt="月食光度剖面：从本影中心约负15.5档平缓爬升，41角分处陡升，73角分到达满月0档" width="1200" height="1200" loading="lazy"></a>
+          <figcaption>光线追踪给出的光度剖面（0 档 = 未食满月）。本影内是折射光的平缓斜坡，41′ 本影边界附近陡升，半影里直射光渐入、平滑爬到 73′ 的满月。图中曲线为 1600 万条光线的分层抽样跑，中心读 −15.5 档；模型卡基准跑（400 万光线）为 −15.1 档，差异来自中心几环的统计涨落。点图可在新标签查看大图。</figcaption>
         </figure>
       </div>
     </section>
@@ -738,6 +788,7 @@
   </main>
 
   <footer>
+    <p class="footer-nav"><a href="#top">↑ 回到顶部</a> · <a href="principles.html">原理深度解读</a> · <a data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub 仓库</a></p>
     <p>月食绿松石带 · 大气与臭氧数据来自 AFGL 廓线与 Serdyuchenko 2014 实测截面 · 页面里是压缩预览，完整分辨率的图和视频可以用仓库里的命令自己生成。</p>
   </footer>
 
