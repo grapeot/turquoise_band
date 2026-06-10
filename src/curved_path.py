@@ -64,6 +64,34 @@ def _path_factor(r_km, L, with_refraction=True):
     return 1.0 / cos_psi
 
 
+def tau_aer550_components(h_tangent_km, z_top_km=90.0, n_steps=20000,
+                          with_refraction=True, aod550_trop=0.0,
+                          aod550_strat=0.0):
+    """沿弯曲光路的气溶胶 550nm slant 光学厚度两组分 (tau_t550, tau_s550)。
+
+    几何与 tau_curved 完全同构(同 Bouguer 不变量、同 sqrt 加密网格、同 ×2 对称),
+    两组分(对流层指数廓线 / 平流层对流层顶锚定指数尾, 见
+    atmosphere.beta_aerosol_550_components)在同一 pf·dr_du 网格上独立积分——
+    它们的 Ångström 指数不同(ALPHA_TROP=0.7 / ALPHA_STRAT=2.0), 波长外推必须
+    分开做。β 单位 km⁻¹, 沿路径积分直接得 550nm 光学厚度(无需 cm 换算)。
+    """
+    r_t = R_EARTH + h_tangent_km
+    r_top = R_EARTH + z_top_km
+    n_t = refractive_index(h_tangent_km) if with_refraction else 1.0
+    L = n_t * r_t
+    u = np.linspace(0.0, np.sqrt(r_top - r_t), n_steps)
+    r = r_t + u ** 2
+    dr_du = 2.0 * u
+    z = r - R_EARTH
+    pf = _path_factor(r, L, with_refraction=with_refraction)
+    beta_t, beta_s = atmosphere.beta_aerosol_550_components(
+        z, aod550_trop=aod550_trop, aod550_strat=aod550_strat)
+    du = u[1] - u[0]
+    tau_t550 = 2.0 * float(np.trapezoid(beta_t * pf * dr_du, dx=du))
+    tau_s550 = 2.0 * float(np.trapezoid(beta_s * pf * dr_du, dx=du))
+    return tau_t550, tau_s550
+
+
 def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
                with_refraction=True, aod550_trop=0.0, aod550_strat=0.0):
     """沿真实弯曲光路积分光学厚度 τ(λ)。
@@ -74,9 +102,11 @@ def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
     lam_nm       : 波长数组 nm
     z_top_km     : 大气上界(此上消光可忽略) km
     with_refraction : True=真实弯曲路径; False=直线对照(n≡1)
-    aod550_trop / aod550_strat : 背景气溶胶垂直 AOD@550nm(对流层指数/平流层 Junge 层),
-        0=纯分子大气(理论亮度上限)。波长依赖 (λ/550)^(−1.3)。权威管线默认开
-        (见 raytrace_eclipse), 本函数默认 0 保持旧调用方语义。
+    aod550_trop / aod550_strat : 背景气溶胶垂直 AOD@550nm(对流层指数/平流层
+        对流层顶锚定指数尾), 0=纯分子大气(理论亮度上限)。两组分沿同一路径独立
+        积分、独立 Ångström 外推: τ_t550·(λ/550)^(−ALPHA_TROP) +
+        τ_s550·(λ/550)^(−ALPHA_STRAT)(2026-06-10 裁决, 替代旧单一 α=1.3)。
+        权威管线默认开(见 raytrace_eclipse), 本函数默认 0 保持旧调用方语义。
     返回 τ(λ), 形状同 lam_nm。已含切点两侧对称(×2)。
 
     数值: 径向网格在切点附近用 sqrt 间距加密(那里 1/cos ψ 近奇异, 可积但需细)。
@@ -122,11 +152,13 @@ def tau_curved(h_tangent_km, lam_nm, z_top_km=90.0, n_steps=20000,
     tau = N_air * sig_ray + N_o3 * sig_o3
 
     if aod550_trop > 0.0 or aod550_strat > 0.0:
-        beta_aer = atmosphere.beta_aerosol_550(z, aod550_trop=aod550_trop,
-                                               aod550_strat=aod550_strat)
-        # β 单位 km^-1, 沿路径积分直接得 550nm 光学厚度(无需 cm 换算)
-        tau_aer_550 = 2.0 * np.trapezoid(beta_aer * pf * dr_du, dx=du)
-        tau = tau + tau_aer_550 * (lam / 550.0) ** (-1.3)
+        # 两组分独立积分、独立 α(同网格重建, 数值与本函数路径逐位一致)
+        tau_t550, tau_s550 = tau_aer550_components(
+            h_tangent_km, z_top_km=z_top_km, n_steps=n_steps,
+            with_refraction=with_refraction, aod550_trop=aod550_trop,
+            aod550_strat=aod550_strat)
+        tau = (tau + tau_t550 * (lam / 550.0) ** (-atmosphere.ALPHA_TROP)
+               + tau_s550 * (lam / 550.0) ** (-atmosphere.ALPHA_STRAT))
 
     return tau, N_air, N_o3
 

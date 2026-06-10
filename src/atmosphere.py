@@ -73,18 +73,59 @@ if __name__ == "__main__":
     print("自查通过：臭氧层峰值在平流层，空气密度随高度衰减。")
 
 
-def beta_aerosol_550(z_km, aod550_trop=0.07, h_trop_km=1.5,
-                     aod550_strat=0.005, z_strat_km=20.0, w_strat_km=2.5):
-    """背景气溶胶 550nm 消光系数 β(z) (km⁻¹)。垂直积分 = aod550_trop + aod550_strat。
+# 气溶胶 Ångström 指数, 分层(2026-06-10 裁决换代, 替代旧单一 α=1.3):
+# - 对流层 0.7±0.4: limb 环以海洋气溶胶为主, 远洋粗粒子 α≈0.3、大陆 1.0-1.5
+#   (MAN 船测, Smirnov 2011)。
+# - 平流层 2.0±0.4: 硫酸盐细粒子, SAGE III 525/1020 消光比 3.2-4.8 → α 1.75-2.36;
+#   Kloss 2020 pristine 期 AE≈1.7。
+ALPHA_TROP = 0.7
+ALPHA_STRAT = 2.0
 
-    对流层：指数廓线 exp(-z/H)，H≈1.5km——边界层+自由对流层的"最晴夜"背景
-    （Mallama 2022 恒星测光经验消光 E_green=0.20 mag/airmass 里隐含的 ~0.06 mag/am
-    主要就是它）。平流层：Junge 层高斯（z≈20km，火山静默期 AOD≈0.005）。
-    波长依赖 (λ/550nm)^(−1.3)（Ångström α=1.3）由调用方乘。
-    背景值出处：GloSSAC/AERONET 静默期共识 AOD550 0.05-0.10；见 2026-06-09 暗端对账。
+
+def beta_aerosol_550_components(z_km, aod550_trop=0.07, h_trop_km=1.5,
+                                aod550_strat=0.005, z0_strat_km=12.0,
+                                h_strat_km=6.0):
+    """背景气溶胶 550nm 垂直消光系数两组分 (beta_t, beta_s) (km⁻¹)。
+
+    两组分波长依赖不同(对流层 ALPHA_TROP=0.7 / 平流层 ALPHA_STRAT=2.0), 必须
+    分开返回、由调用方各自乘 (λ/550)^(−α) 再相加——这是 2026-06-10 参数换代的
+    核心改动(旧版单一 α=1.3 合并返回)。
+
+    对流层: 指数廓线 (aod_t/H)·exp(−z/H), H≈1.5km——边界层+自由对流层的"最晴夜"
+    海洋背景, τa(500)≈0.07(MAN 船测, Smirnov 2011; 区间 0.04-0.10)。对带区是二阶
+    (z>10km 处 <1e-4 km⁻¹)。
+
+    平流层: 对流层顶锚定指数尾(2026-06-10 裁决, 替代旧高斯 z=20km/σ=2.5km):
+        β_s(z) = (aod_s/H)·exp(−(z−z0)/H), z≥z0=12km, H=6km
+    旧高斯把全柱挤进 19-23km, k550(20km)=8e-4 超观测 3-8×, 恰压绿松石带区。
+    指数尾三硬约束全过(火山静默期/Ambae 衰减中段背景, 2019-01 口径):
+      - k550(20km) = 2.2e-4 km⁻¹ ∈ (1–2.5)e-4   (Wrana 2021 / Thomason 2021 换算)
+      - k550(25km) = 0.96e-4 km⁻¹ ∈ (0.5–1.5)e-4 (同上)
+      - sAOD550 = 0.005 ∈ 0.004–0.006            (Kloss 2020 换算; "静默期
+        0.001-0.003"系 1999-2004 极小期/1020nm 口径, 不适用于 2019-01)
+    同时贴合"层主体贴对流层顶(中高纬 10-16km)、20km 以上递减"的观测形态
+    (Thomason / Malinina 2021 / Wrana 2021)。
+    简化注记: z0 以下硬截断是中高纬对流层顶的简化, z0 处 β 不连续(跳变量级
+    8e-4 km⁻¹ = aod_s/H), 对 slant 积分是可接受的量级近似。
     """
     z = np.asarray(z_km, dtype=float)
     beta_t = (aod550_trop / h_trop_km) * np.exp(-np.clip(z, 0.0, None) / h_trop_km)
-    g = np.exp(-0.5 * ((z - z_strat_km) / w_strat_km) ** 2)
-    beta_s = aod550_strat * g / (w_strat_km * np.sqrt(2.0 * np.pi))
+    beta_s = np.where(z >= z0_strat_km,
+                      (aod550_strat / h_strat_km)
+                      * np.exp(-(z - z0_strat_km) / h_strat_km), 0.0)
+    return beta_t, beta_s
+
+
+def beta_aerosol_550(z_km, aod550_trop=0.07, h_trop_km=1.5,
+                     aod550_strat=0.005, z0_strat_km=12.0, h_strat_km=6.0):
+    """两组分之和(对流层指数 + 平流层指数尾), km⁻¹。垂直积分 = aod_t + aod_s。
+
+    注意: 合并值只适用于不区分波长依赖的诊断(如垂直 AOD 核算); 消光计算应使用
+    beta_aerosol_550_components 两组分各配 ALPHA_TROP/ALPHA_STRAT。
+    参数依据见 beta_aerosol_550_components docstring。
+    """
+    beta_t, beta_s = beta_aerosol_550_components(
+        z_km, aod550_trop=aod550_trop, h_trop_km=h_trop_km,
+        aod550_strat=aod550_strat, z0_strat_km=z0_strat_km,
+        h_strat_km=h_strat_km)
     return beta_t + beta_s

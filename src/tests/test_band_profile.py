@@ -2,7 +2,8 @@
 
 测的是口径定义必须成立的不变量, 不是实现细节:
 - 太阳谱带比值: 单色 654/491 ≈0.737(catch 太阳谱加载/波长轴回归), boxcar 带平均 ≈0.80
-- 气溶胶提取: tau_aer550 与 tau_curved 的 on−off 差严格一致, aod=0 时恒为 0
+- 气溶胶两组分: tau_t550/tau_s550 与 tau_curved 的 on−off 差严格一致, aod=0 时恒为 0;
+  平流层指数尾形状三硬约束(k550(20km)/k550(25km)/sAOD550)
 - 集成(slow): 直射区 sun-norm R/B→1(±2%, catch 归一化/通量守恒回归),
   绿松石带凹陷存在且位置合理
 
@@ -31,10 +32,11 @@ def test_sun_band_ratio():
     assert 0.67 < integ < 0.70, f"带积分 B4/B2={integ:.4f} 应≈0.685"
 
 
-# ── 气溶胶路径光学厚度提取 ──────────────────────────────────────────────────
-def test_aerosol_tau550_extraction():
-    """precompute_nodes 的 tau_aer550 应与 tau_curved 的 (aod on)−(aod off)
-    在 550nm 严格一致(同 z_tan 同步数), 且 aod=0 时恒为 0、随切点高度趋零。"""
+# ── 气溶胶路径光学厚度: 两组分一致性 ─────────────────────────────────────────
+def test_aerosol_tau550_two_components():
+    """precompute_nodes 的 tau_t550/tau_s550 应与 tau_curved 的 (单组分 aod on)−(off)
+    在 550nm 严格一致(同 z_tan 同步数, 550nm 处 (λ/550)^−α≡1 与 α 无关),
+    两组分之和应等于全开−off, 且 aod=0 时恒为 0。"""
     nodes = bp.precompute_nodes(n_h_nodes=10, h_max=30.0, trace_ds_km=0.5,
                                 tau_steps=600)
     lam = np.array([550.0])
@@ -42,17 +44,49 @@ def test_aerosol_tau550_extraction():
         if nodes["blocked"][i]:
             continue
         z = float(nodes["z_tan"][i])
-        t_on = cp.tau_curved(z, lam, z_top_km=90.0, n_steps=600,
-                             aod550_trop=0.07, aod550_strat=0.005)[0][0]
         t_off = cp.tau_curved(z, lam, z_top_km=90.0, n_steps=600)[0][0]
-        assert np.isclose(nodes["tau_aer550"][i], t_on - t_off, rtol=1e-10, atol=1e-12), \
-            f"z_tan={z:.1f}km: 提取 {nodes['tau_aer550'][i]:.4f} != 直接差 {t_on-t_off:.4f}"
-    # 深擦边是一阶项, 高空趋零(Junge 层以上)
+        t_trop = cp.tau_curved(z, lam, z_top_km=90.0, n_steps=600,
+                               aod550_trop=0.07, aod550_strat=0.0)[0][0]
+        t_strat = cp.tau_curved(z, lam, z_top_km=90.0, n_steps=600,
+                                aod550_trop=0.0, aod550_strat=0.005)[0][0]
+        t_both = cp.tau_curved(z, lam, z_top_km=90.0, n_steps=600,
+                               aod550_trop=0.07, aod550_strat=0.005)[0][0]
+        assert np.isclose(nodes["tau_t550"][i], t_trop - t_off,
+                          rtol=1e-10, atol=1e-12), \
+            f"z_tan={z:.1f}km: 对流层组分 {nodes['tau_t550'][i]:.4f} != " \
+            f"直接差 {t_trop-t_off:.4f}"
+        assert np.isclose(nodes["tau_s550"][i], t_strat - t_off,
+                          rtol=1e-10, atol=1e-12), \
+            f"z_tan={z:.1f}km: 平流层组分 {nodes['tau_s550'][i]:.4f} != " \
+            f"直接差 {t_strat-t_off:.4f}"
+        assert np.isclose(nodes["tau_t550"][i] + nodes["tau_s550"][i],
+                          t_both - t_off, rtol=1e-10, atol=1e-12), \
+            f"z_tan={z:.1f}km: 两组分之和 != 全开−off"
+    # 深擦边是一阶项(对流层主导); aod=0 时两组分恒为 0
     ok = ~nodes["blocked"]
-    assert nodes["tau_aer550"][ok][0] > 0.5, "深擦边 tau_aer550 应 >0.5(一阶项)"
+    assert (nodes["tau_t550"] + nodes["tau_s550"])[ok][0] > 0.5, \
+        "深擦边气溶胶 slant τ550 应 >0.5(一阶项)"
     nodes0 = bp.precompute_nodes(n_h_nodes=6, h_max=30.0, trace_ds_km=0.5,
                                  tau_steps=400, aod550_trop=0.0, aod550_strat=0.0)
-    assert np.allclose(nodes0["tau_aer550"], 0.0, atol=1e-12), "aod=0 时应恒为 0"
+    assert np.allclose(nodes0["tau_t550"], 0.0, atol=1e-12), "aod=0 时对流层组分应恒为 0"
+    assert np.allclose(nodes0["tau_s550"], 0.0, atol=1e-12), "aod=0 时平流层组分应恒为 0"
+
+
+# ── 平流层指数尾形状硬约束(2026-06-10 裁决, 防参数漂移) ──────────────────────
+def test_aerosol_strat_shape_constraints():
+    """对流层顶锚定指数尾(z0=12km, H=6km, sAOD550=0.005)必须满足三硬约束
+    (Wrana 2021 / Thomason 2021 / Kloss 2020 换算, 2019-01 背景口径):
+    k550(20km)∈(1–2.5)e-4 km⁻¹, k550(25km)∈(0.5–1.5)e-4 km⁻¹, sAOD550∈0.004–0.006。
+    旧高斯(20, 2.5) k550(20km)=8e-4 超标 3–8×, 此 test 防止形状回退。"""
+    import atmosphere as atm
+    _, bs = atm.beta_aerosol_550_components(np.array([20.0, 25.0]))
+    k20, k25 = float(bs[0]), float(bs[1])
+    assert 1e-4 <= k20 <= 2.5e-4, f"k550(20km)={k20:.2e} 不在 (1–2.5)e-4"
+    assert 0.5e-4 <= k25 <= 1.5e-4, f"k550(25km)={k25:.2e} 不在 (0.5–1.5)e-4"
+    z = np.linspace(0.0, 90.0, 90001)
+    saod = float(np.trapezoid(atm.beta_aerosol_550_components(z)[1], z))
+    assert 0.004 <= saod <= 0.006, f"sAOD550={saod:.4f} 不在 0.004–0.006"
+    assert abs(saod - 0.005) < 2e-4, f"sAOD550={saod:.4f} 应≈0.005(柱归一)"
 
 
 # ── 集成: 撒线后的口径不变量(慢, 标记 slow) ──────────────────────────────────

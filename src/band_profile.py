@@ -15,9 +15,10 @@
   4. `--model-card` 一键产出 docs/MODEL_CARD.md(当前模型关键数字 + 口径标注)。
 
 与 forward_trace 的物理对齐(默认全开, 可关):
-  - 气溶胶: precompute 阶段对每个 unblocked 节点沿弯曲路径积分 550nm 气溶胶光学
-    厚度 tau_aer550(atmosphere.beta_aerosol_550, 经 curved_path.tau_curved 提取),
-    band_weights 里每带 tau += tau_aer550·(λ/550)^(−1.3)。默认 aod550_trop=0.07 /
+  - 气溶胶: precompute 阶段对每个 unblocked 节点沿弯曲路径积分 550nm 气溶胶
+    光学厚度两组分 tau_t550/tau_s550(curved_path.tau_aer550_components), 权重
+    函数里 tau += tau_t550·(λ/550)^(−ALPHA_TROP) + tau_s550·(λ/550)^(−ALPHA_STRAT)
+    (α 分层 0.7/2.0, 2026-06-10 裁决, 替代旧单一 α=1.3)。默认 aod550_trop=0.07 /
     aod550_strat=0.005, 与 forward_trace 一致。
   - 太阳 limb darkening: scatter 的太阳子点权重 w_ld = 1−0.93(1−μ)+0.23(1−μ)²
     (Allen V 带二次律), 均值归一(总通量守恒), 与 forward_trace 同公式。
@@ -45,6 +46,7 @@ import refraction_trace as rtr
 import curved_path as cp
 import cross_sections as cs
 import color as col
+import atmosphere as atm
 
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
 RAW = os.path.join(_ROOT, "data", "raw")
@@ -61,8 +63,8 @@ BANDS = {"B": (390.0, 490.0), "V": (500.0, 600.0),
          "R": (570.0, 720.0), "I": (720.0, 880.0),
          "B2": (450.0, 520.0), "B4": (630.0, 690.0)}
 
-# 气溶胶 Ångström 指数(波长依赖 (λ/550)^(−ANG), 与 curved_path/forward_trace 一致)
-ANGSTROM_EXP = 1.3
+# 气溶胶 Ångström 指数: 分层 atm.ALPHA_TROP=0.7 / atm.ALPHA_STRAT=2.0
+# (单一 ANGSTROM_EXP=1.3 已于 2026-06-10 退役, 见 atmosphere.py 常数注释与 DECISION 裁决)
 
 
 def load_solar_wide(lo=360.0, hi=950.0):
@@ -98,13 +100,14 @@ def sun_band_ratio(num="B4", den="B2", per_nm=True):
 
 def precompute_nodes(n_h_nodes=400, h_max=90.0, trace_ds_km=0.25, tau_steps=2000,
                      aod550_trop=0.07, aod550_strat=0.005):
-    """h 网格上的 α(h)、z_tan、blocked、弯曲路径柱密度 N_air/N_o3、气溶胶 tau_aer550。
+    """h 网格上的 α(h)、z_tan、blocked、弯曲路径柱密度 N_air/N_o3、
+    气溶胶 slant 光学厚度两组分 tau_t550/tau_s550。
 
     完全照搬 raytrace_eclipse: α 用 trace_rays_batch(z_top=120), 消光柱密度用
     tau_curved(z_tan, z_top=90)——真实切点高度口径(2026-06-09 修复1)。
-    气溶胶提取: tau_curved 把气溶胶折进返回的 τ 总量, 这里单波长 550nm 开 AOD 调一次,
-    τ_aer550 = τ(550, aod on) − N_air·σ_ray(550) − N_o3·σ_o3(550)(分子部分解析剥离,
-    σ 与 tau_curved 内部同一来源, 减法精确到浮点)。aod 置 0 时 tau_aer550≡0。
+    气溶胶: curved_path.tau_aer550_components 沿同一弯曲路径几何积分两组分
+    (对流层/平流层, Ångström 指数不同必须分存; 2026-06-10 裁决, 替代旧的
+    单条 tau_aer550 减法提取)。aod 置 0 时两组分恒为 0。
     """
     h_nodes = np.linspace(0.0, h_max, n_h_nodes)
     alpha, z_tan, blocked = rtr.trace_rays_batch(h_nodes, z_top_km=120.0,
@@ -112,23 +115,33 @@ def precompute_nodes(n_h_nodes=400, h_max=90.0, trace_ds_km=0.25, tau_steps=2000
     alpha = np.where(blocked, np.nan, alpha)
     N_air = np.zeros(n_h_nodes)
     N_o3 = np.zeros(n_h_nodes)
-    tau_aer550 = np.zeros(n_h_nodes)
+    tau_t550 = np.zeros(n_h_nodes)
+    tau_s550 = np.zeros(n_h_nodes)
     lam550 = np.array([550.0])
-    sig_r550 = float(cs.sigma_rayleigh(lam550)[0])
-    sig_o550 = float(cs.sigma_o3(lam550)[0])
     for i in range(n_h_nodes):
         if blocked[i]:
             continue
-        tau, Na, No = cp.tau_curved(float(z_tan[i]), lam550, z_top_km=90.0,
-                                    n_steps=tau_steps, with_refraction=True,
-                                    aod550_trop=aod550_trop,
-                                    aod550_strat=aod550_strat)
+        _, Na, No = cp.tau_curved(float(z_tan[i]), lam550, z_top_km=90.0,
+                                  n_steps=tau_steps, with_refraction=True)
         N_air[i] = Na
         N_o3[i] = No
-        tau_aer550[i] = max(float(tau[0]) - Na * sig_r550 - No * sig_o550, 0.0)
+        if aod550_trop > 0.0 or aod550_strat > 0.0:
+            tau_t550[i], tau_s550[i] = cp.tau_aer550_components(
+                float(z_tan[i]), z_top_km=90.0, n_steps=tau_steps,
+                with_refraction=True, aod550_trop=aod550_trop,
+                aod550_strat=aod550_strat)
     return dict(h_nodes=h_nodes, alpha=alpha, z_tan=z_tan, blocked=blocked,
-                N_air=N_air, N_o3=N_o3, tau_aer550=tau_aer550,
+                N_air=N_air, N_o3=N_o3, tau_t550=tau_t550, tau_s550=tau_s550,
                 aod550_trop=aod550_trop, aod550_strat=aod550_strat)
+
+
+def _tau_nodes(nodes, lam):
+    """节点 × 波长的总光学厚度矩阵: Rayleigh + O3 + 气溶胶两组分(独立 α)。"""
+    lam = np.asarray(lam, float)
+    return (nodes["N_air"][:, None] * cs.sigma_rayleigh(lam)[None, :]
+            + nodes["N_o3"][:, None] * cs.sigma_o3(lam)[None, :]
+            + nodes["tau_t550"][:, None] * (lam[None, :] / 550.0) ** (-atm.ALPHA_TROP)
+            + nodes["tau_s550"][:, None] * (lam[None, :] / 550.0) ** (-atm.ALPHA_STRAT))
 
 
 def band_weights(nodes, bands=None):
@@ -144,12 +157,8 @@ def band_weights(nodes, bands=None):
     for name, (lo, hi) in bands.items():
         lam_b = np.arange(lo, hi + 0.5, 1.0)
         I0 = SUN(lam_b)
-        sig_r = cs.sigma_rayleigh(lam_b)
-        sig_o = cs.sigma_o3(lam_b)
         denom = np.trapezoid(I0, lam_b)
-        tau = (nodes["N_air"][:, None] * sig_r[None, :]
-               + nodes["N_o3"][:, None] * sig_o[None, :]
-               + nodes["tau_aer550"][:, None] * (lam_b[None, :] / 550.0) ** (-ANGSTROM_EXP))
+        tau = _tau_nodes(nodes, lam_b)
         w = np.trapezoid(I0[None, :] * np.exp(-tau), lam_b, axis=1) / denom
         w[nodes["blocked"]] = 0.0
         lam_mean = float(np.trapezoid(lam_b * I0, lam_b) / denom)
@@ -167,9 +176,7 @@ def mono_weights(nodes, lam0_nm):
     模型卡两种都报。
     """
     lam = np.array([float(lam0_nm)])
-    tau = (nodes["N_air"][:, None] * cs.sigma_rayleigh(lam)[None, :]
-           + nodes["N_o3"][:, None] * cs.sigma_o3(lam)[None, :]
-           + nodes["tau_aer550"][:, None] * (lam[None, :] / 550.0) ** (-ANGSTROM_EXP))
+    tau = _tau_nodes(nodes, lam)
     w = np.exp(-tau[:, 0])
     w[nodes["blocked"]] = 0.0
     dsc = float(cs.dry_air_n_minus_1(float(lam0_nm)) / cs.dry_air_n_minus_1(600.0))
@@ -181,15 +188,12 @@ def photopic_weights(nodes, n_lam=121):
     lam = np.linspace(380.0, 780.0, n_lam)
     I0 = SUN(lam)
     k_white = 1.0 / col.spectrum_to_XYZ(lam, I0)[1]
-    sig_r = cs.sigma_rayleigh(lam)
-    sig_o = cs.sigma_o3(lam)
+    tau = _tau_nodes(nodes, lam)
     w = np.zeros(len(nodes["h_nodes"]))
     for i in range(len(w)):
         if nodes["blocked"][i]:
             continue
-        tau = (nodes["N_air"][i] * sig_r + nodes["N_o3"][i] * sig_o
-               + nodes["tau_aer550"][i] * (lam / 550.0) ** (-ANGSTROM_EXP))
-        w[i] = col.spectrum_to_XYZ(lam, I0 * np.exp(-tau))[1] * k_white
+        w[i] = col.spectrum_to_XYZ(lam, I0 * np.exp(-tau[i]))[1] * k_white
     return w
 
 
@@ -520,9 +524,10 @@ def run_model_card(n_rays=4_000_000, n_sun=2000, n_h_nodes=400, tau_steps=2000,
                   grid_half_km=grid_half_km, n_pix=n_pix, n_r_bins=n_r_bins,
                   limb_dark=True, seed=seed, center_stats_band="V")
 
-    # 分子大气上限: 同节点把 tau_aer550 置 0(α/柱密度不变), LD 关(对齐 -13.5 基线口径)
+    # 分子大气上限: 同节点把气溶胶两组分置 0(α/柱密度不变), LD 关(对齐 -13.5 基线口径)
     print(f"[3/4] 分子上限撒线(aod=0, LD 关, phot only) ... [{time.time()-t0:.0f}s]")
-    nodes_mol = dict(nodes, tau_aer550=np.zeros_like(nodes["tau_aer550"]),
+    nodes_mol = dict(nodes, tau_t550=np.zeros_like(nodes["tau_t550"]),
+                     tau_s550=np.zeros_like(nodes["tau_s550"]),
                      aod550_trop=0.0, aod550_strat=0.0)
     wY_mol = photopic_weights(nodes_mol)
     res_mol = scatter(nodes_mol, [dict(name="phot", w=wY_mol, dsc=1.0)],
@@ -663,14 +668,33 @@ def _format_model_card(m):
             f"（min sRGB R/B {m['srgb_rb_min']:.2f}，分子口径 {m['srgb_rb_min_mol']:.2f}）："
             f"sRGB R 通道的有效权重正压在 Chappuis 核（~580–640nm），而 GF-4 B4"
             f"（630–690nm）大半避开了核区，对 teal 天然不敏感。与文献张力的候选归因，"
-            f"按可能性排序：(1) 我们本影内 a=20–35' 偏亮 4–8 mag（暗端对账，消光标定"
-            f"口径），红层洪泛因此偏强 1–2 个量级，正是它把窄带 teal 淹没——暗端偏亮与"
-            f"窄带 ribbon 缺失是**同一根因的两端表现**；若深擦边消光到 Mallama 实测水平，"
-            f"红洪压暗后窄带凹陷应显形；(2) GF-4 PMS 实际光谱响应非 boxcar，若 B4 响应"
-            f"含 600–630nm 边带则直接采到 Chappuis 核；(3) 文献是 2D 边界像素测量 + "
-            f"月面纹理（月海 Ti）耦合，与 1D 轴对称径向平均不是同一把尺（续16 已知"
-            f"口径差）。")
+            f"按证据强度排序：(1) **z_tan 8–19km 红肩消光缺失**（对流层顶薄卷云/"
+            f"subvisible cirrus + UTLS 增强消光，本模型未建模）：该层占带区通量 "
+            f"47–83%，机制探针显示对其额外压暗 2–3 mag（垂直 OD ~0.04–0.07，"
+            f"slant ×40–50）即让 λ_eff ribbon 从无到有（宽 76–79 km，与文献 "
+            f"120–190 km 同量级偏窄）且中心档数纹丝不动；转正需独立证据——"
+            f"CALIPSO/SPARC 卷云气候学 + 2019-01-21 当晚 limb 一圈云况；"
+            f"(2) GF-4 PMS 实际光谱响应非 boxcar，若 B4 响应含 600–630nm 边带则直接"
+            f"采到 Chappuis 核；(3) 文献是 2D 边界像素测量 + 月面纹理（月海 Ti）耦合，"
+            f"与 1D 轴对称径向平均不是同一把尺（续16 已知口径差；点太阳对照下 1D 径向"
+            f"折叠本身就抹掉凹陷）。"
+            f"\n\n**三层解耦结论（2026-06-10 敏感性矩阵裁决）**：z_tan<8km 深层光只控"
+            f"暗端（带区通量占比仅 0.3%，人工压暗 3 mag 把中心档数推进 Mallama 区间而 "
+            f"dip 恢复量精确为零）；8–19km 红肩控 ribbon（见候选 (1)）；~20km 平流层层"
+            f"只控宽带 teal 对比（sAOD 0→0.005 吃掉 sRGB 对比 0.047，对窄带 dip 仅 "
+            f"0.0012）——三层互不串扰，暗端、ribbon、宽带 teal 是三个独立的开放项。")
     shu_analysis += "（按验证纪律如实记录，未调参凑文献。）"
+    public_statement = (
+        f"> 在仅含 Rayleigh+O3+背景气溶胶（参数取 2019-01 气候学观测值，未调参）的"
+        f"模型下，宽带渲染口径的蓝化稳健（min sRGB R/B≈{m['srgb_rb_min']:.2f}，"
+        f"分子上限 {m['srgb_rb_min_mol']:.2f}），但 Shu 2024 卫星窄带口径的 R/B<1 "
+        f"ribbon 在 1D 径向平均上复现不出（凹陷 <1%，噪声级）。敏感性分析排除了背景"
+        f"气溶胶参数与本影深层红光作为根因：带区通量的 47–83% 来自切高 8–19km 的"
+        f"“红肩”光，文献量级的 ribbon 需要该层额外 ~2–3 mag 的 slant 消光"
+        f"（垂直 OD ~0.02–0.07，在对流层顶薄卷云气候学范围内，但本模型未建模、亦无"
+        f"当晚 limb 云况证据，故如实留作开放项）。另有 GF-4 光谱响应、月面反照率 "
+        f"±15%、2D 边界测量 vs 1D 径向平均三个口径差，量级均足以改写“R/B<1”"
+        f"判据的边界。")
     table_note = ("" if dip_survives else
                   "\n注：sun-norm 与 λ_eff 行的最蓝点/「<1 区间」是 ±0.3% 统计噪声"
                   "穿越各自基线所致，**无物理 ribbon**（见下方裁决段）。\n")
@@ -700,8 +724,10 @@ def _format_model_card(m):
 - h 网格 n_h_nodes={m['n_h_nodes']}（RK4 ds=0.25km，τ 积分 tau_steps={m['tau_steps']}，
   消光用真实切点高度 z_tan 口径）
 - 落点网格 ±{m['grid_half_km']:.0f} km / {m['n_pix']}px，径向 {m['n_r_bins']} bins
-- 物理默认全开：背景气溶胶 AOD550 对流层 {m['aod550_trop']} + 平流层 {m['aod550_strat']}
-  （Ångström α=1.3），太阳 limb darkening（Allen V 带二次律，均值归一）
+- 物理默认全开：背景气溶胶 AOD550 对流层 {m['aod550_trop']}（指数廓线 H=1.5km，
+  α={atm.ALPHA_TROP}）+ 平流层 {m['aod550_strat']}（对流层顶锚定指数尾 z0=12km/H=6km，
+  α={atm.ALPHA_STRAT}；k550(20km)=2.2e-4、k550(25km)=0.96e-4、sAOD550=0.005，
+  三硬约束全过，Wrana/Thomason/Kloss 换算），太阳 limb darkening（Allen V 带二次律，均值归一）
 - 消光成分：Rayleigh + O3 + 背景气溶胶。**未建模**：H2O/O2 吸收带（影响 I 带）、云、多次散射
 
 ## 暗端（本影中心，反日轴最内 3 环平均，0 档 = 未食满月）
@@ -753,6 +779,10 @@ A = 月面反照率比 654/491 = {A}，月海/高地随 Ti 含量 **±15% 系统
 比我们 1D 轴对称"R/B<1 全区间"窄，见 working.md 续16 的口径差分析）。
 
 {shu_analysis}
+
+**公开表述（对外写作的口径，DECISION 2026-06-10 §4 措辞）**：
+
+{public_statement}
 
 ## 口径警告：三种 R/B 不可混比
 
