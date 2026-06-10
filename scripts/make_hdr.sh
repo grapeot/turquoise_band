@@ -4,8 +4,11 @@
 set -e
 cd "$(dirname "$0")/.."
 
-REF="../YabiVision/YabiVision/Resources/reference.HEIC"
-[ -f "$REF" ] || { echo "缺 reference.HEIC（YabiVision 的 gain map 元数据来源）"; exit 1; }
+# gain map 元数据模板：任何 iPhone 默认相机直出的 HEIC 都可以（只取其 HDR gain map
+# 元数据结构，不用其图像内容）。用环境变量指定：
+#   HDR_REFERENCE_HEIC=~/Pictures/IMG_0001.HEIC bash scripts/make_hdr.sh
+REF="${HDR_REFERENCE_HEIC:-../YabiVision/YabiVision/Resources/reference.HEIC}"
+[ -f "$REF" ] || { echo "缺 gain map 元数据模板。请设 HDR_REFERENCE_HEIC=<任一 iPhone 实拍 HEIC>（需含 Apple gain map，iPhone 默认相机直出即可）"; exit 1; }
 
 echo "[1/2] 渲染 SDR base + 线性 HDR..."
 source .venv/bin/activate

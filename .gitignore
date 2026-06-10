@@ -4,29 +4,42 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Data: keep small raw reference files in git, ignore large derived/processed binaries
+# Data: 小型原始参考数据入库(含 12MB 臭氧截面, 明确决策保留);
+# 大型可重下数据不入库(重建 URL 见 data/raw/SOURCES.md)
 data/processed/*.npy
 data/processed/*.npz
-outputs/*.png
-outputs/*.mp4
-!outputs/.gitkeep
-
-# 大尺寸 NASA 月面纹理（公有领域，可按 data/raw/SOURCES.md 的 URL 重新下载）
 data/raw/moon_texture/*.tif
 data/raw/moon_texture/*.jpg
+data/raw/earth_texture/*.jpg
 
-# OS
-.DS_Store
+# Outputs: 渲染产物默认不入库; 已显式入库的精选结果图(README/Pages 引用)除外。
+# 注意: gitignore 不影响已 tracked 文件; 下面的 ! 白名单是为了让意图显式。
+outputs/*.png
+outputs/*.mp4
 outputs/*.tif
 outputs/*.heic
-data/raw/earth_texture/*.jpg
 outputs/video_frames/
-outputs/*.mp4
 outputs/video_frames_hdr/
+outputs/*.npz
+!outputs/.gitkeep
+!outputs/L0_colorband.png
+!outputs/L0_hue_curve.png
+!outputs/L1_angular_curve.png
+!outputs/L1_colorband.png
+!outputs/diag_spectrum_25km.png
+!outputs/moon_bluefringe.png
+!outputs/moon_brightness_cliff.png
+!outputs/moon_composite.png
+!outputs/moon_positions.png
+!outputs/moon_realistic.png
+!outputs/moon_realistic_raw.png
 
-# 调研抓取缓存与临时文件（含第三方版权内容, 不入库）
+# 调研抓取缓存与临时文件(含第三方版权内容, 不入库)
 .tmp/
 tmp/
 
 # 私有笔记(不入库)
 docs/PRIVATE_NOTES.md
+
+# OS
+.DS_Store
