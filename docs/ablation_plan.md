@@ -57,7 +57,7 @@
    叙事弧线验证: 步2左黑右白(无折射全黑)→步3瑞利血月红→步4臭氧浓青带(高潮)→步5圆盘浅青(反转)。
    每步R/B: 步2=1.13 步3=3.34 步4=0.53 步5=0.71@40 步6=0.70。版式: 左上改动/左下注释/右下增强标注。
 3. [x] **翻页视频** outputs/ablation_flip.mp4(20s, slideleft翻页, 7张含真实版收尾)。
-   上传内部分享站 ablation_flip.mp4
+   上传 yage.ai/share/eclipse/ablation_flip.mp4
 4. [ ] **文章**（提纲已在本文第一节，最后成文）— 待写
 
 **渲染脚本**: src/render_ablation.py。STEPS 列表定义6步, ablation 开关:

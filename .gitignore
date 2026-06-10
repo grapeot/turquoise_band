@@ -27,3 +27,6 @@ outputs/video_frames_hdr/
 # 调研抓取缓存与临时文件（含第三方版权内容, 不入库）
 .tmp/
 tmp/
+
+# 私有笔记(不入库)
+docs/PRIVATE_NOTES.md
