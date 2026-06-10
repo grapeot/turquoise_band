@@ -43,3 +43,7 @@ docs/PRIVATE_NOTES.md
 
 # OS
 .DS_Store
+
+# 大渲染产物不入库(可由 build_video/render_ablation/band_profile 重生成; 发布版挂 GitHub Release)
+outputs/MoonEclipse_Dolby.mov
+outputs/ablation/*.tif
