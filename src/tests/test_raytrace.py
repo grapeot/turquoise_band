@@ -102,14 +102,15 @@ def test_direct_light_reaches_full_moon():
     import raytrace_eclipse as rte
     import geometry as g
     r = rte.forward_trace(n_rays_b=2_000_000, n_sun=1000, n_h_nodes=300, n_pix=240,
-                          n_disp=6, grid_half_km=9000.0, h_direct_max=3000.0, verbose=False)
+                          n_disp=6, grid_half_km=9000.0, h_direct_max=5500.0, verbose=False)
     rc = np.array(r["r_cent"]); surf = np.array(r["surf_r"])
     a = np.degrees(np.arctan(rc / g.D_MOON_KM)) * 60
     v = np.isfinite(surf) & (surf > 0)
-    # 出本影区(a~65-72')应接近满月(>0.7, 即 >-0.5档)——直射光把它点亮到满月
+    # 出本影区(a~65-72')应回到满月(>0.95)——直射光把它点亮到满月。
+    # 阈值 0.95 而非旧 0.7: h_direct_max 撒线截断会让外缘假性掉到 ~0.88, 旧阈值拦不住。
     out = v & (a > 65) & (a < 73)
-    assert out.any() and surf[out].max() > 0.7, \
-        f"出本影端最亮 surf={surf[out].max() if out.any() else 0:.2f} 应 >0.7(直射光到满月)"
+    assert out.any() and surf[out].max() > 0.95, \
+        f"出本影端最亮 surf={surf[out].max() if out.any() else 0:.2f} 应 >0.95(直射光精确回满月)"
     # 半影区无假跃变: 相邻径向 bin 的档数变化应平滑(单步 <2 档, 不像旧 clamp 的 ~5 档硬跳)
     pen = v & (a > 41) & (a < 70)
     st = np.log2(np.clip(surf[pen], 1e-9, None))

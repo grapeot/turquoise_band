@@ -72,29 +72,39 @@ def dispersion_scale(lam_nm, lam_ref=600.0):
 
 
 def _precompute_alpha_traced(h_nodes, ds_km=0.02, z_top_km=120.0):
-    """在 h 网格上预计算真追踪折射角 α(h) (rad) 和撞地遮挡掩码。
+    """在 h 网格上预计算真追踪折射角 α(h) (rad)、真实切点高度与撞地遮挡掩码。
 
     返回:
       alpha_nodes : (Hn,)  真追踪 α，单位 rad；blocked 的 h 处填 nan
+      z_tan_nodes : (Hn,)  真实切点高度 km。折射把切点压得比 impact-parameter h 低
+                    （impact h=2.7km 的光线真切点 ≈1.1km），消光积分必须用它而非 h
       blocked     : (Hn,)  bool，True=该 impact-parameter 光线弯到地表以下被遮挡
     """
     # 矢量化批量追踪(替原串行 for, ~80× 提速, α 逐位一致)。blocked 光线 α 填 nan。
-    alpha, _z_tan, blocked = rtr.trace_rays_batch(h_nodes, z_top_km=z_top_km, ds_km=ds_km)
+    alpha, z_tan, blocked = rtr.trace_rays_batch(h_nodes, z_top_km=z_top_km, ds_km=ds_km)
     alpha = np.where(blocked, np.nan, alpha)
-    return alpha, blocked
+    return alpha, z_tan, blocked
 
 
-def _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0, n_steps=4000):
+def _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0, n_steps=4000,
+                                z_tan_nodes=None, blocked_nodes=None):
     """在 h 网格上预计算沿真实弯曲路径的出射谱 I(λ,h)=I_sun·exp(-τ_curved)。
 
     τ 用 curved_path.tau_curved（Bouguer 弯曲光路），替换直线柱密度。
-    返回 (Hn, L) 出射谱矩阵。
+    tau_curved 的输入语义是**切点高度**，不是 impact parameter——折射把切点压得
+    比 impact-h 低，深擦边光线用 impact-h 积分会把消光低估 ~0.6-0.7 mag（本影中心
+    偏亮 ~0.7 档）。调用方应传入 trace_rays_batch 给出的真实 z_tan_nodes。
+    blocked 光线到不了月面，出射谱保持 0、跳过积分。
+    返回 (Hn, L) 出射谱矩阵（按 impact-h 网格索引）。
     """
     I_sun = solar.solar_spectrum(lam)
     Hn = len(h_nodes)
     I_emerg = np.zeros((Hn, len(lam)))
-    for i, h in enumerate(h_nodes):
-        tau, _, _ = cp.tau_curved(float(h), lam, z_top_km=z_top_km,
+    h_tan = h_nodes if z_tan_nodes is None else z_tan_nodes
+    for i in range(Hn):
+        if blocked_nodes is not None and blocked_nodes[i]:
+            continue
+        tau, _, _ = cp.tau_curved(float(h_tan[i]), lam, z_top_km=z_top_km,
                                   n_steps=n_steps, with_refraction=True)
         I_emerg[i] = I_sun * np.exp(-tau)
     return I_emerg
@@ -111,8 +121,11 @@ def forward_trace(
     n_disp=12,
     trace_ds_km=0.25,       # RK4 弧长步长（α 在 ds=0.25 vs 0.02 一致到 0.01'，12× 提速）
     tau_steps=2000,         # 弯曲路径 τ 积分步数（curved_path 在 ≥1500 步收敛）
-    h_direct_max=2500.0,    # 直射光: impact b∈[R_e+h_max, R_e+h_direct_max]的光线在大气外, α=0、
+    h_direct_max=5500.0,    # 直射光: impact b∈[R_e+h_max, R_e+h_direct_max]的光线在大气外, α=0、
                             # 满谱不衰减(太阳探出地球缘的直射光)。覆盖半影区到满月。
+                            # 必须 ≥ d·tan(a_max+16')−R_e, 否则月面外缘有太阳子点的直射光
+                            # 没被撒出来→亮度假性下降(采样截断, 非物理)。a=73' 需 ≥3600,
+                            # 取 5500 留余量(73.2' 处实测精确回到满月 1.000)。
     seed=0,
     verbose=True,
 ):
@@ -128,7 +141,7 @@ def forward_trace(
 
     if verbose:
         print(f"[1/3] 预计算真追踪折射角 α(h)（{n_h_nodes} 个 RK4 积分）...")
-    alpha_nodes, blocked_nodes = _precompute_alpha_traced(
+    alpha_nodes, z_tan_nodes, blocked_nodes = _precompute_alpha_traced(
         h_nodes, ds_km=trace_ds_km, z_top_km=120.0)
     n_block = int(blocked_nodes.sum())
     h_graze = h_nodes[~blocked_nodes][0] if (~blocked_nodes).any() else np.nan
@@ -139,7 +152,9 @@ def forward_trace(
     if verbose:
         print(f"[2/3] 预计算弯曲路径出射谱 I(λ,h)（{n_h_nodes} 次 τ 积分）...")
     I_emerg = _precompute_emergent_curved(h_nodes, lam, z_top_km=90.0,
-                                          n_steps=tau_steps)
+                                          n_steps=tau_steps,
+                                          z_tan_nodes=z_tan_nodes,
+                                          blocked_nodes=blocked_nodes)
 
     # ---- 满月白点：未衰减日光 XYZ，k_white=1/Y_white → 满月 Y=1 ----
     I_sun_full = solar.solar_spectrum(lam)
@@ -315,9 +330,10 @@ def build_lut_from_raytrace(res=None, a_hi=73.0, **trace_kw):
     """
     import numpy as _np
     if res is None:
-        # 默认参数覆盖满月: grid_half_km 大、h_direct_max 含直射光
+        # 默认参数覆盖满月: grid_half_km 大、h_direct_max 含直射光且覆盖 a_hi+16'
+        # (h_direct_max=3000 只干净到 ~68', 曾让 LUT 外缘 68-73' 满月端假性偏暗 ~0.2 档)
         trace_kw.setdefault("grid_half_km", 9000.0)
-        trace_kw.setdefault("h_direct_max", 3000.0)
+        trace_kw.setdefault("h_direct_max", 5500.0)
         res = forward_trace(verbose=False, **trace_kw)
     rc_km = _np.asarray(res["r_cent"]); XYZ_r = _np.asarray(res["XYZ_r"])
     a = _np.degrees(_np.arctan(rc_km / D_MOON)) * 60.0
