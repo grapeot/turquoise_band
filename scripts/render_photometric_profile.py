@@ -1,7 +1,7 @@
 """光度曲线: 本影中心→满月的 photopic 径向剖面 (真·正向 ray tracing)。
 
 旧版 outputs/photometric_profile.png 的生成脚本散佚(2026-06-09 审计发现), 本脚本收编重建。
-物理走权威管线 raytrace_eclipse.forward_trace(默认参数: 4M 光线 × 2000 太阳子点,
+物理走权威管线 raytrace_eclipse.forward_trace(16M 光线 × 2000 太阳子点(本影深处统计够平滑),
 气溶胶两组分 + 太阳 limb darkening, 含半影直射光), 零解析处方。
 
 输出 outputs/photometric_profile.png:
@@ -30,7 +30,7 @@ def main():
     t0 = time.time()
     # 默认物理参数(4M 光线)。grid_half_km=9000 让径向剖面覆盖到半影外缘 73'+
     # (默认 7000 只到 ~63'), 与 build_lut_from_raytrace 的覆盖口径一致。
-    res = rte.forward_trace(grid_half_km=9000.0, verbose=True)
+    res = rte.forward_trace(n_rays_b=16_000_000, grid_half_km=9000.0, verbose=True)
     print(f"forward_trace 用时 {time.time() - t0:.0f}s")
 
     d_moon = g.D_MOON_KM

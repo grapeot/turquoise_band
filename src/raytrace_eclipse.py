@@ -129,6 +129,10 @@ def forward_trace(
                             # 必须 ≥ d·tan(a_max+16')−R_e, 否则月面外缘有太阳子点的直射光
                             # 没被撒出来→亮度假性下降(采样截断, 非物理)。a=73' 需 ≥3600,
                             # 取 5500 留余量(73.2' 处实测精确回到满月 1.000)。
+    refr_frac=0.5,          # 分层抽样: 折射壳层(h<h_max)的光线配额。该壳层面积只占撒线
+                            # 总面积 ~1%, 均匀撒线时深本影每径向环只摊到 O(10²) 条光线,
+                            # LUT/光度曲线带 MC 噪声(月盘上呈同心环假象)。每层通量按各自
+                            # 面积归一(无偏 stratified sampling), 只缩方差不改物理。
     aod550_trop=0.07,       # 背景气溶胶(对流层, H=1.5km)。0=纯分子大气理论上限(比任何真实
     aod550_strat=0.005,     # 月食都亮 ~2-3 mag); 0.07+0.005=最晴夜背景(GloSSAC/AERONET 静默期,
                             # 与 Mallama 恒星测光经验消光隐含值一致)。见 2026-06-09 暗端对账。
@@ -224,16 +228,20 @@ def forward_trace(
     XYZ_grid = np.zeros((n_pix, n_pix, 3))
     cnt_grid = np.zeros((n_pix, n_pix))
 
-    # ---- 满月归一：每条线携带通量 = Φ0·A_ring/n_rays（见模块 docstring）----
-    # 撒线范围扩到含直射光: b∈[R_e, R_e+h_direct_max]。b<R_e+h_max 擦大气(折射), b>R_e+h_max
+    # ---- 满月归一 + 分层抽样 ----
+    # 撒线范围含直射光: b∈[R_e, R_e+h_direct_max]。b<R_e+h_max 擦大气(折射), b>R_e+h_max
     # 在大气外(直射, α=0, 满谱不衰减)。半影区直射光渐入自然涌现, 平滑过渡到满月。
+    # 分层(stratified): 折射壳层面积仅 ~1%, 均匀撒线会让深本影统计饥饿(同心环噪声)。
+    # 两层各自等面积均匀撒、各按 flux_i=Φ0·A_i/n_i 归一 → 估计量无偏, 方差缩 ~refr_frac/面积比。
     PHI0 = 1.0
     b_outer = R_e + h_direct_max
-    A_ring = np.pi * (b_outer ** 2 - R_e ** 2)
-    ray_flux = PHI0 * A_ring / n_rays_b
+    b_atm = R_e + h_max
     full_moon_surface_brightness = 1.0
     # 直射光的满谱 XYZ(不衰减白光, 各色散段一致——直射无色散位移)
     white_XYZ_direct = white_XYZ * k_white   # Y=1 的满月白
+    n_refr = int(round(n_rays_b * refr_frac))
+    strata = [(R_e, b_atm, n_refr),               # 折射壳层
+              (b_atm, b_outer, n_rays_b - n_refr)]  # 直射壳层
 
     # B6 修复: blocked 用逐节点最近邻插值(不用单一标量阈值, 避免 blocked 区不连续时出错);
     # α 插值前把 blocked 节点用最近的 unblocked 边界 α 填充(不填 0, 避免紧邻 blocked 的
@@ -247,60 +255,64 @@ def forward_trace(
     blocked_f = blocked_nodes.astype(float)           # 逐节点 blocked 状态(0/1)
 
     chunk = 1_000_000
-    done = 0
-    while done < n_rays_b:
-        m = min(chunk, n_rays_b - done)
-        done += m
-        U = rng.uniform(0.0, 1.0, size=m)
-        b_mag = np.sqrt(U * (b_outer ** 2 - R_e ** 2) + R_e ** 2)  # 扩到含直射光
-        phi = rng.uniform(0.0, 2 * np.pi, size=m)
-        bx = np.cos(phi); by = np.sin(phi)
-        h = b_mag - R_e
-        direct = h > h_max          # 大气外: 直射光(α=0, 满谱不衰减)
+    for b_lo, b_hi, n_stratum in strata:
+        if n_stratum <= 0:
+            continue
+        ray_flux = PHI0 * np.pi * (b_hi ** 2 - b_lo ** 2) / n_stratum
+        done = 0
+        while done < n_stratum:
+            m = min(chunk, n_stratum - done)
+            done += m
+            U = rng.uniform(0.0, 1.0, size=m)
+            b_mag = np.sqrt(U * (b_hi ** 2 - b_lo ** 2) + b_lo ** 2)  # 层内等面积均匀
+            phi = rng.uniform(0.0, 2 * np.pi, size=m)
+            bx = np.cos(phi); by = np.sin(phi)
+            h = b_mag - R_e
+            direct = h > h_max          # 大气外: 直射光(α=0, 满谱不衰减)
 
-        # 折射光: 真追踪 α(h); blocked(h<擦地极限)→撞地不落月面。直射光 α=0、永不 blocked。
-        alpha0 = np.where(direct, 0.0, np.interp(h, h_nodes, alpha_clean))
-        unblocked = direct | (np.interp(h, h_nodes, blocked_f) < 0.5)
+            # 折射光: 真追踪 α(h); blocked(h<擦地极限)→撞地不落月面。直射光 α=0、永不 blocked。
+            alpha0 = np.where(direct, 0.0, np.interp(h, h_nodes, alpha_clean))
+            unblocked = direct | (np.interp(h, h_nodes, blocked_f) < 0.5)
 
-        si = rng.integers(0, n_sun, size=m)
-        sdx = sun_dx[si]; sdy = sun_dy[si]
-        wl = w_ld[si]                      # 该光线所属太阳子点的 limb darkening 权重
+            si = rng.integers(0, n_sun, size=m)
+            sdx = sun_dx[si]; sdy = sun_dy[si]
+            wl = w_ld[si]                      # 该光线所属太阳子点的 limb darkening 权重
 
-        # 亮度: 折射光查 Y_full_nodes(消光后); 直射光=满月白 Y=1(不衰减)
-        Yray = np.where(direct, white_XYZ_direct[1], np.interp(h, h_nodes, Y_full_nodes))
+            # 亮度: 折射光查 Y_full_nodes(消光后); 直射光=满月白 Y=1(不衰减)
+            Yray = np.where(direct, white_XYZ_direct[1], np.interp(h, h_nodes, Y_full_nodes))
 
-        # ---- 各色散波段：折射落点 + 累加 XYZ（颜色 + 色散涌现）----
-        # 直射光 α=0(不弯不色散), 各段平摊满谱白; 折射光走色散段。
-        npix2 = n_pix * n_pix
-        for bi, (dsc, XYZ_b) in enumerate(bands):
-            alpha = alpha0 * dsc                  # 直射 alpha0=0 → α=0
-            r_land = b_mag - alpha * D_MOON
+            # ---- 各色散波段：折射落点 + 累加 XYZ（颜色 + 色散涌现）----
+            # 直射光 α=0(不弯不色散), 各段平摊满谱白; 折射光走色散段。
+            npix2 = n_pix * n_pix
+            for bi, (dsc, XYZ_b) in enumerate(bands):
+                alpha = alpha0 * dsc                  # 直射 alpha0=0 → α=0
+                r_land = b_mag - alpha * D_MOON
+                x_land = bx * r_land + sdx
+                y_land = by * r_land + sdy
+                ix = np.floor((x_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
+                iy = np.floor((y_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
+                inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
+                flat = ix[inside] * n_pix + iy[inside]
+                hh = h[inside]; dir_in = direct[inside]; wl_in = wl[inside]
+                for c in range(3):
+                    # 折射光: 查该段消光后 XYZ; 直射光: 满谱白的该段份额(满谱/n_disp, 平摊到各段)
+                    Xc = np.interp(hh, h_nodes, XYZ_b[:, c])
+                    Xc = np.where(dir_in, white_XYZ_direct[c] / len(bands), Xc)
+                    XYZ_grid[:, :, c].reshape(-1)[:] += np.bincount(
+                        flat, weights=Xc * wl_in * ray_flux, minlength=npix2)
+
+            # ---- 全谱亮度落点（用 ref 折射，无色散位移）：亮度档数主结果 ----
+            r_land = b_mag - alpha0 * D_MOON
             x_land = bx * r_land + sdx
             y_land = by * r_land + sdy
             ix = np.floor((x_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
             iy = np.floor((y_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
             inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
             flat = ix[inside] * n_pix + iy[inside]
-            hh = h[inside]; dir_in = direct[inside]; wl_in = wl[inside]
-            for c in range(3):
-                # 折射光: 查该段消光后 XYZ; 直射光: 满谱白的该段份额(满谱/n_disp, 平摊到各段)
-                Xc = np.interp(hh, h_nodes, XYZ_b[:, c])
-                Xc = np.where(dir_in, white_XYZ_direct[c] / len(bands), Xc)
-                XYZ_grid[:, :, c].reshape(-1)[:] += np.bincount(
-                    flat, weights=Xc * wl_in * ray_flux, minlength=npix2)
-
-        # ---- 全谱亮度落点（用 ref 折射，无色散位移）：亮度档数主结果 ----
-        r_land = b_mag - alpha0 * D_MOON
-        x_land = bx * r_land + sdx
-        y_land = by * r_land + sdy
-        ix = np.floor((x_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
-        iy = np.floor((y_land + grid_half_km) / (2 * grid_half_km) * n_pix).astype(int)
-        inside = unblocked & (ix >= 0) & (ix < n_pix) & (iy >= 0) & (iy < n_pix)
-        flat = ix[inside] * n_pix + iy[inside]
-        npix2 = n_pix * n_pix
-        Y_grid.reshape(-1)[:] += np.bincount(
-            flat, weights=(Yray * wl)[inside] * ray_flux, minlength=npix2)
-        cnt_grid.reshape(-1)[:] += np.bincount(flat, minlength=npix2)
+            npix2 = n_pix * n_pix
+            Y_grid.reshape(-1)[:] += np.bincount(
+                flat, weights=(Yray * wl)[inside] * ray_flux, minlength=npix2)
+            cnt_grid.reshape(-1)[:] += np.bincount(flat, minlength=npix2)
 
     # ---- 面亮度 = 每像素累加通量 / 像素面积（相对满月）----
     surf = Y_grid / pix_area / full_moon_surface_brightness
@@ -342,11 +354,11 @@ def forward_trace(
     )
 
 
-def build_lut_from_raytrace(res=None, a_hi=73.0, **trace_kw):
+def build_lut_from_raytrace(res=None, a_hi=73.0, smooth_sigma_bins=2.0, **trace_kw):
     """从真 ray tracing 径向剖面建 a(arcmin)→XYZ LUT, 兼容 render_rt.shade_disk_lut 接口。
 
     res: forward_trace 结果(None 则现跑一次)。返回 dict(a, XYZ): a 角距(arcmin), XYZ 线性。
-    含半影直射光: 本影中心-13档(古铜血月)→半影区直射光渐入→出本影满月, 全程ray tracing涌现,
+    含半影直射光: 本影中心(古铜血月)→半影区直射光渐入→出本影满月, 全程ray tracing涌现,
     **无硬clamp**(直射光实现后剖面自然到满月)。替换旧 build_disk_lut(偏亮-7.7)。
     默认 grid/h_direct_max 覆盖满月(73')。
     """
@@ -361,6 +373,14 @@ def build_lut_from_raytrace(res=None, a_hi=73.0, **trace_kw):
     a = _np.degrees(_np.arctan(rc_km / D_MOON)) * 60.0
     ok = _np.isfinite(XYZ_r[:, 1]) & (a <= a_hi)
     a = a[ok]; XYZ = XYZ_r[ok].copy()
+    if smooth_sigma_bins and smooth_sigma_bins > 0:
+        # 残余蒙特卡洛分箱噪声平滑(续15 同款处理): σ=2bins≈0.6', 远小于青带 ~4' 与
+        # 悬崖 ~3.5' 的物理尺度, 不毁结构; 主治本影深处低统计 bin 经 LUT 插值放大成
+        # 月盘同心环的假象。分层抽样(refr_frac)已消大半噪声, 这是第二道保险。0=关。
+        from scipy.ndimage import gaussian_filter1d
+        for c in range(3):
+            XYZ[:, c] = gaussian_filter1d(XYZ[:, c], sigma=smooth_sigma_bins,
+                                          mode="nearest")
     return dict(a=a, XYZ=XYZ)
 
 
