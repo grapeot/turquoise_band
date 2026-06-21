@@ -1,0 +1,6 @@
+numpy>=1.26
+scipy>=1.13
+colour-science>=0.4
+matplotlib>=3.8
+Pillow>=10.0
+pytest>=8.0
