@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A deep dive into the principles behind the lunar eclipse turquoise band simulation: six key technical decisions, a three-way reconciliation with the literature, key numbers from the model card, and reproducible commands for every production image.">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Principles — A Deep Dive · Lunar Eclipse Turquoise Band">
+  <meta property="og:description" content="A deep dive into the principles behind the lunar eclipse turquoise band simulation: six key technical decisions, a three-way reconciliation with the literature, key numbers from the model card, and reproducible commands for every production image.">
+  <meta property="og:url" content="https://grapeot.github.io/turquoise_band/principles-en.html">
+  <meta property="og:image" content="https://grapeot.github.io/turquoise_band/assets/hero_moon_rt.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>Principles — A Deep Dive · Lunar Eclipse Turquoise Band</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060504;
+      --panel: #14100d;
+      --text: #ede7e0;
+      --muted: #a89c91;
+      --line: rgba(208, 191, 178, 0.18);
+      --copper: #c98a5e;
+      --teal: #8fd2c9;
+      --max: 880px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.85;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+    img { display: block; max-width: 100%; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 8, 6, 0.96);
+    }
+
+    .topbar-inner {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      margin: -10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(201, 138, 94, 0.62);
+      border-radius: 50%;
+      background: radial-gradient(circle at 38% 50%, rgba(150, 60, 32, 0.9) 0 7px, transparent 8px), radial-gradient(circle at 72% 50%, rgba(143, 210, 201, 0.85) 0 3px, transparent 4px);
+    }
+
+    .nav { display: flex; gap: 18px; color: var(--muted); font-size: 14px; white-space: nowrap; }
+    .nav a:hover { color: var(--text); }
+
+    main {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 56px 0 80px;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--copper);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.16; margin: 0 0 18px; }
+    h2 { font-size: clamp(24px, 3.6vw, 34px); line-height: 1.2; margin: 72px 0 8px; scroll-margin-top: 84px; }
+    h3 { font-size: 20px; margin: 44px 0 6px; }
+    h1, h2 { text-wrap: balance; }
+
+    p { margin: 14px 0 0; color: #d3c8bc; }
+    .lead { font-size: clamp(17px, 1.8vw, 20px); color: #d8cec4; }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #e6ddd1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    pre code { border: 0; padding: 0; background: none; }
+
+    table {
+      width: 100%;
+      min-width: 640px;
+      margin: 18px 0 0;
+      border-collapse: collapse;
+      font-size: 14.5px;
+    }
+
+    th, td {
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      color: #d3c8bc;
+    }
+
+    th {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.045);
+      font-weight: 600;
+    }
+
+    .table-wrap { overflow-x: auto; margin-top: 8px; }
+
+    .note {
+      margin-top: 26px;
+      padding: 18px 20px;
+      border: 1px solid rgba(201, 138, 94, 0.42);
+      border-radius: 12px;
+      background: rgba(201, 138, 94, 0.07);
+    }
+
+    .note p { margin: 0; }
+    .note p + p { margin-top: 10px; }
+
+    .note a {
+      color: var(--copper);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    footer {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 60px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    @media (max-width: 720px) {
+      .nav a.hide-mobile { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="index-en.html" aria-label="Back to Home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Lunar Eclipse Turquoise Band</span>
+      </a>
+      <nav class="nav" aria-label="Page navigation">
+        <a class="hide-mobile" href="#decisions">Six Decisions</a>
+        <a class="hide-mobile" href="#literature">Literature Check</a>
+        <a class="hide-mobile" href="#numbers">Key Numbers</a>
+        <a class="hide-mobile" href="#repro">Reproduction</a>
+        <a href="index-en.html">Back to Home</a>
+        <a href="principles.html">中文</a>
+        <a data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <p class="eyebrow">This page is for the people who want to know exactly where every number came from.</p>
+    <h1>Principles — A Deep Dive</h1>
+    <p class="lead">Every pixel you saw on the homepage has its color traced through a single, unbroken physical chain. It starts with a measured solar spectrum. Light enters Earth's atmosphere, where refraction bends it toward a specific landing point on the Moon. Along that now-curved path, Rayleigh scattering, ozone absorption, and background aerosols strip the spectrum down layer by layer. The resulting spectrum is then mapped to color coordinates through CIE color matching functions. There are no texture maps anywhere in this pipeline, no hand-tuned color parameters, and no empirical correction terms. This page walks through the six key technical decisions behind the pipeline design, cross-checks the results against three independent research groups from the literature, and collects the model card's critical numbers — each one annotated with exactly what it's measuring and how. Finally, it provides reproducible commands for generating every production-quality image.</p>
+
+    <h2>Three Principles That Run Through Everything</h2>
+    <p>First, keep the physics calculation and the screen display as two separate stages. Everything produced by the ray tracing step is a linear radiometric quantity — this stage does no visual sweetening whatsoever. The final on-screen appearance is handed off to exposure and tone mapping, both of which we explicitly label as display-layer human choices rather than letting them leak into the physics. The single most expensive lesson in this entire project was learned right at this boundary: early renders boosted the exposure to bring out shadow detail, and in doing so turned a genuinely narrow turquoise band into a soft gradient stretching across nearly a third of the lunar disk. We stared at that wide band for a long time, deeply suspicious that something was wrong with the physics model. After turning it inside out, we finally realized the problem wasn't in the physics at all — the display layer was manufacturing an illusion. The current default exposure anchors to the brightest point on the lunar disk, which preserves the light–dark boundary and restores the band to its physically correct narrowness.</p>
+    <p>Second, the physics model is not steered by how things look. Every time something on screen seemed off — blues slightly the wrong shade, band width looking too broad, cyan not saturated enough — the choice in front of us was always to go back to the measurement method, the display parameters, or the literature conventions to find the cause, never to stuff a new mechanism into the model just to force the visual result. Satellite measurements later gave us point-by-point confirmation: the magnitude of the in-band red-to-blue ratio, the selenographic location of the colored band, and the overall pale cyan impression all matched the observations.</p>
+    <p>Third, if something can be solved by ray tracing, don't write an analytic formula for it. Focusing factors, chord-length weighting, effective path lengths — all of these are quantities that ray tracing produces naturally; the moment you package them into analytic formulas, errors creep in quietly. Take umbral center brightness as an example. A purely analytic approach gave −7.7 stops. After switching to ray casting with properly traced refraction, it corrected all the way to −13.5 stops. Every stop of exposure in between represents a debt that some analytic approximation owed to real physics. Four of the six decisions below are essentially repayments on that debt.</p>
+
+    <h2 id="decisions">Six Key Technical Decisions</h2>
+
+    <h3>1. Refraction: No Lookup Tables — RK4 Integration Per Ray</h3>
+    <p>Conventional analytic refraction formulas express the deflection angle as an exponential function of the ray's grazing height. According to such a formula, a ray skimming the surface would be deflected by about 70′. But after numerically integrating each ray individually using RK4, we found that in a real atmosphere this 70′ simply doesn't exist. Here's why: rays aimed at heights between 0 and 1 km get bent so strongly that their tangent point dips below the ground — they hit the Earth's surface and disappear, never reaching the Moon. The rays that actually manage to graze past the surface have an aiming height of about 1.7 km, and their deflection comes out to 63.5′. The pattern holds at middle and high altitudes too, with real deflections consistently larger than the analytic formula predicts: at 12 km altitude, 21′ versus 15.7′. Light bends toward the umbral center more aggressively than the formula expects. Refraction geometry is the skeleton of the entire model — any systematic shift in that skeleton would simultaneously throw off both the selenographic position of the color and the brightness at the dark end — so we didn't cut corners here.</p>
+
+    <h3>2. Extinction Integrated Along the Curved Path, Using the True Tangent Height</h3>
+    <p>Once a ray is refracted, its actual path through the atmosphere is longer than a straight line, and the column density of gas along that path cannot be estimated from straight-line geometry — it has to be accumulated segment by segment along the true curved trajectory. This one bit us through a terminology mismatch: at one point the pipeline was feeding a ray's aiming height (impact parameter) directly into the extinction integrator, treating it as the tangent height. But refraction pushes the true tangent point lower. A ray aimed at 2.7 km, for example, has a true tangent height of only 1.1 km, where the atmospheric density is far higher. Using the wrong height produced a systematic underestimate of extinction. After the fix, the umbral center dimmed by an additional 0.68 stops. This lesson shares a root with the third principle: even inside a pipeline that has largely avoided analytic shortcuts, let a single analytic quantity slip in and it will still bite you.</p>
+
+    <h3>3. Focusing and Defocusing: No Formulas — They Emerge from Landing-Point Density</h3>
+    <p>After refraction, some rays entering the umbra converge while others spread apart. Early analytic pipelines handled this with a focusing-factor formula, but that formula blows up at the umbral center — it heads toward infinity — forcing you to clamp it with a regularization floor, which then produces a spurious bright spot right where things should be darkest. The correct approach is to go back to the most basic meaning of ray tracing: randomly cast millions of rays, observe where their landing points cluster on the lunar disk, and the number of rays landing in each area is, by definition, that area's brightness. Focusing and defocusing require no formulas at all — they simply emerge from the landing-point distribution. The record of numbers preserves this evolutionary path cleanly: analytic chord-length weighting gave −7.7 stops for the umbral center; ray casting with analytic refraction still used gave −11 stops; switching to fully traced refraction brought it to −13.1 stops (measured in photopic, molecular atmosphere, 0 stops = uneclipsed full Moon). The single most decisive diagnostic is this: a single ray passing through the umbral center experiences a one-way transmission loss of only −7.9 stops, but the bin-averaged surface brightness there comes out to −13.1 stops. The 5.2-stop gap in between is entirely geometric defocusing: the deepest refracted light that grazed the Earth's surface gets spread thin across the entire lunar disk. No analytic formula had ever accounted for this.</p>
+
+    <h3>4. Penumbral Direct Light Uses the Same Ray-Casting Run</h3>
+    <p>As the Moon moves out of the umbra, the Sun gradually peeks out from behind the Earth's limb and direct sunlight incrementally returns. Early pipeline runs only traced refracted rays, which produced a spurious jump in the light curve just outside the umbral boundary — it looked like brightness suddenly leaping upward, when in reality the direct-light contribution was simply missing. Rather than smoothing over the artifact, we extended the ray-casting aiming range outward to 5500 km above the atmosphere. Beyond the atmosphere, rays travel in straight lines with no attenuation, and the gradual brightening of penumbral direct light emerges naturally from the same ray-casting machinery — the light curve climbs smoothly all the way to full-Moon brightness at 73′. There's also an engineering lesson here: insufficient ray coverage producing a false dimming has appeared in this project three times in different guises — the moving shadow at the end of the video, the downturn at the tail of the light curve, and the missing direct light described above. The coverage calculation is now computed by working backward from the maximum angular distance needed on the consumer side plus the solar radius. This rule has been written into the checklist and won't be missed again.</p>
+
+    <h3>5. Stratified Sampling: The Concentric Ring Incident</h3>
+    <p>When the ray-casting range was expanded, a hidden landmine came along with it. The refractive shell occupies only about 1.1% of the total casting area — meaning that out of 4 million rays, only a few tens of thousands follow a refractive path. When those few tens of thousands are then distributed across over a hundred radial bins inside the umbra, each bin ends up with sample counts in the low hundreds. Statistical noise at these sample levels, amplified through lookup table (LUT) interpolation, ultimately produced concentric ring artifacts visible to the naked eye on the lunar disk render, with matching sawtooth jitter in the light curve. A user spotted this with their eyes while reviewing the images. We initially classified it as inherent Monte Carlo noise and planned to accept it honestly. Re-investigation changed the diagnosis: this was uneven sampling allocation, not something unavoidable — it could be eliminated by improving the sampling strategy. The fix used a standard unbiased variance-reduction approach: the refractive shell and the direct-light shell each normalize their own flux by their respective areas, and the ray budget is split 50/50 between the two shells. After the fix, the median brightness jump between adjacent umbral bins dropped from 0.158 stops to 0.085 stops. The lesson: uniform ray casting starves small but critical regions when the area ratios are extreme. Stratified sampling is a tax that any physics-first pipeline should pay upfront.</p>
+
+    <h3>6. Two-Component Background Aerosol and Solar Limb Darkening</h3>
+    <p>The last two pieces of real physics added to the model use parameters taken entirely from climatology observations — not a single one was tuned to fit. Background aerosol is split into two components: the first is a tropospheric marine background (AOD550 = 0.07, exponential profile, Ångström exponent 0.7); the second is stratospheric sulfate fine particles (sAOD550 = 0.005, profile anchored at the tropopause with an exponential tail, Ångström exponent 2.0). The stratospheric profile is not drawn arbitrarily — it has to simultaneously satisfy three hard constraints from observations: the extinction coefficients at 20 km and 25 km, and the total column amount, all three must check out together. Solar limb darkening uses the quadratic law for the Allen V band, normalized to the mean. The cost is recorded honestly too: stratospheric aerosol raises scattering at short wavelengths, and limb darkening makes the solar disk center brighter — the two effects combined wash out the band's red-to-blue ratio from 0.715 in a pure molecular atmosphere to 0.814 (measured in raw sRGB). The turquoise band therefore appears paler. This is an objective physical outcome, and the rendering end did not go back to boost saturation.</p>
+
+    <h2 id="literature">Three-Way Reconciliation with the Literature</h2>
+
+    <h3>Geometry: Mallama's Refraction Mapping Table</h3>
+    <p>We compared our refractive mapping — the conversion from ray grazing height to selenographic angular distance — line by line against the corresponding entries in Mallama 2021/2022 tables. Agreement across all mid- and high-altitude ranges is within 2%. This match is foundational: only when the refraction mapping holds up does the discussion of color position along the radial direction have firm ground to stand on.</p>
+
+    <h3>The Dark End: Two Clear-Sky Models, Several Stops Apart</h3>
+    <p>Our model gives an umbral center brightness of −15.1 stops (default physics, photopic), while the theoretical upper bound for a pure molecular atmosphere — with all aerosols and limb darkening switched off — is −13.5 stops. Mallama's clear-sky empirical extinction model, by comparison, yields −18.7 stops for disk-integrated brightness and −20.5 stops for disk-resolved V-band, both of which are consistent with actual observations of normal lunar eclipses. Two models, both labeled "clear-sky," produce outputs that differ by 3.6 to 5.4 stops. A gap that large means that, despite sharing the same label, they are measuring different things. The key reason is that the slant-path distance for grazing rays is equivalent to 40 to 60 standard air masses — any tiny calibration difference in the extinction parameters, after being stretched across such an extreme path length, gets magnified by a factor of dozens. We used sensitivity experiments to isolate the source of the discrepancy to deep-penetration rays with tangent heights below 8 km: these rays affect only the dark-end brightness, not the color or ribbon of the band. The most likely explanation is that there are extinction sources in this altitude region that remain unmodeled. This is our largest open question. Our conclusion is honest: our dark-end numbers represent the brightness upper bound for the clearest possible conditions; real deep eclipses will be darker.</p>
+
+    <h3>Color: Shu 2024 Satellite Narrowband Conventions and GOES-16</h3>
+    <p>The term "red-to-blue ratio" demands caution when reading across different papers — it corresponds to at least three conventions that cannot be directly interconverted. The first is the linear sRGB channel ratio used in rendering; the second is the transmission ratio after normalizing to the solar spectrum; the third is the direct division of satellite-band radiances, which also requires multiplying by a lunar albedo ratio of 1.35, with a systematic uncertainty in the ±15% range. After aligning all these conventions, the reconciliation results split into two halves. The matching half: the broadband blueward trend is robust, and the in-band red-to-blue ratio falls into the same 0.8 to 1.0 pale-cyan range as the GOES-16 measurements. It's important to note that the conventions are not the same, so this does not constitute a strict quantitative match. The non-matching half involves a feature detected by Shu 2024 using the GF-4 satellite: a boundary ribbon where R/B < 1, with a radial full width between 120 and 190 km. Our 1D model does not reproduce this structure: the single-layer ozone dip, once convolved with the 32′ solar disk and combined with lateral red light inflow within the umbra, gets smoothed down to the noise level. Sensitivity matrix analysis has ruled out aerosol parameters and deep red light as suspects. The remaining candidates, ranked by the strength of evidence, are: possible unmodeled red-end extinction in the 8–19 km tangent height range, with thin cirrus near the tropopause being a candidate not yet incorporated; the actual spectral response curves of the satellite sensors; systematic effects from lunar surface albedo; and the inherent convention gap between a 2D boundary measurement and a 1D radial average. We have never adjusted any model parameter to try to reproduce the ribbon — all open items are documented honestly as they stand.</p>
+
+    <h2 id="numbers">Key Numbers — All with Measurement Conventions</h2>
+    <p>These numbers are all extracted from <code>docs/MODEL_CARD.md</code> in the repository and are auto-generated by <code>band_profile.py</code> with the <code>--model-card</code> flag. Generation conditions: 4 million rays × 2000 solar sub-samples, with a fixed random seed to guarantee reproducibility. The default physics combination is Rayleigh scattering plus ozone absorption plus two-component background aerosol plus solar limb darkening. Any time the physics code changes, the model card is regenerated so the numbers always match the current code.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Quantity</th><th>Value</th><th>Convention</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Umbral center brightness</td><td>−15.1 stops</td><td>photopic, 0 stops = uneclipsed full Moon, default physics; independent pipeline cross-check gives −15.3 stops, difference within Poisson statistics for the central three bins</td></tr>
+          <tr><td>Umbral center brightness (molecular upper bound)</td><td>−13.5 stops</td><td>same convention, but aerosols and limb darkening switched off: the theoretical brightness ceiling for pure Rayleigh + ozone</td></tr>
+          <tr><td>Red-to-blue ratio at bluest point of band</td><td>0.814 (at 41.0′)</td><td>raw sRGB linear channel ratio, includes measured solar spectrum, no normalization — the quantity actually presented in renders; molecular-atmosphere comparison is 0.715 (at 40.3′)</td></tr>
+          <tr><td>Brightness cliff width</td><td>20.4′ (46.7′ to 67.1′)</td><td>photopic surface brightness rising from 10% to 90% of full Moon, i.e. the entire penumbral ramp</td></tr>
+          <tr><td>Steepest gradient at umbral edge</td><td>1.8 stops/arcmin</td><td>35′ to 50′ window, 3-bin smoothing</td></tr>
+          <tr><td>Central B / V / R extinction</td><td>16.6 / 11.8 / 9.2 mag</td><td>in-band normalization (uneclipsed full Moon = 0 mag per band), includes ~4.6 mag geometric dilution; I band is missing water vapor and oxygen absorption bands — absolute value not referenced</td></tr>
+          <tr><td>Reference anchors</td><td>−18.7 to −20.5 stops</td><td>Mallama clear-sky empirical model, disk-integrated and disk-resolved V-band respectively; the gap from our model is an open item</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="repro">Reproduction Commands for Every Production Image</h2>
+    <p>Run from the repository root directory, after activating the virtual environment with <code>source .venv/bin/activate</code>. A complete ray-tracing run takes on the order of seconds; video rendering takes minutes.</p>
+    <pre><code># Homepage hero: realistic eclipse moon disk (true ray-tracing LUT, default d=40')
+python src/render_textured.py
+
+# Six-step ablation sequence (enhanced preview + 16bit linear TIFF)
+python src/render_ablation.py
+
+# Photometric profile curve (fixed 16M-ray stratified sampling, page version is this output)
+python scripts/render_photometric_profile.py
+
+# Dual-perspective quad video (SDR + HDR)
+python src/build_video.py
+
+# Brightness cliff: two-exposure comparison
+python src/diag_brightness_cliff.py
+
+# Model card (source of all numbers on the page and table above)
+python src/band_profile.py --model-card --n-rays 4000000
+
+# Physics invariants and render smoke tests
+python -m pytest src/tests/ -v</code></pre>
+    <p>The point-source vs. disk comparison figure is rendered using the disk ray-tracing mode and its point-source degradation mode in <code>src/brute_ray_trace.py</code>. The trajectory-composite illustration comes from one-off scripts, with composition parameters recorded in <code>docs/working.md</code>.</p>
+
+    <h2>Where to Find the Full Failure Log</h2>
+    <p>This page shows you the pipeline in its final form, but the detours taken to get here are far more interesting than the end result. Two examples. First: we once invented an incorrect refraction formula to fix a bug that didn't actually exist. This formula moved the turquoise band to a position that felt intuitively more correct, and armed with the confidence of a problem apparently solved, it lived in the codebase for an entire day. We only discovered it was wrong during the line-by-line reconciliation with the literature, and deleted it on the spot. A wrong fix is far more dangerous than the original error. Second: for a while, the CIELAB hue angle was showing the turquoise band as strongly blue-shifted, and we nearly modified the physics model because of that signal. It turned out that the CIELAB color metric itself amplifies mild blue shifts — the physics model was fine. From that point on we adopted a principle: when the hue doesn't match, suspect the measurement tool first, then the physics model.</p>
+    <div class="note">
+      <p>All the pitfalls, root-cause analyses, and corresponding fixes are in the repository at <a data-repo-doc="docs/PHYSICS_AND_PITFALLS.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/PHYSICS_AND_PITFALLS.md">docs/PHYSICS_AND_PITFALLS.md</a>. The day-by-day work log and every errata-correction process is recorded in <a data-repo-doc="docs/working.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/working.md">docs/working.md</a>. Literature references: Mallama 2021/2022 (arXiv:2112.08966), Shu et al. 2024 (Remote Sensing 16(22):4181), Serdyuchenko et al. 2014 ozone cross-sections, AFGL atmospheric profiles, SAO2010 solar spectrum.</p>
+    </div>
+  </main>
+
+  <footer>
+    <p><a href="index-en.html">← Back to Home</a> · Lunar Eclipse Turquoise Band · This page shows compressed preview images; for full-resolution images and video, generate them using the reproduction commands in the repository.</p>
+  </footer>
+
+  <script>
+    const repoLinks = document.querySelectorAll("[data-repo-link]");
+    const repoDocs = document.querySelectorAll("[data-repo-doc]");
+    const pathRepo = location.hostname.endsWith("github.io") ? location.pathname.split("/").filter(Boolean)[0] : "";
+    const owner = location.hostname.endsWith("github.io") ? location.hostname.split(".")[0] : "grapeot";
+    if (pathRepo) {
+      repoLinks.forEach((link) => {
+        link.href = `https://github.com/${owner}/${pathRepo}`;
+      });
+      repoDocs.forEach((link) => {
+        link.href = `https://github.com/${owner}/${pathRepo}/blob/master/${link.dataset.repoDoc}`;
+      });
+    }
+  </script>
+</body>
+</html>

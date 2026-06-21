@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="During a total lunar eclipse, a thin cyan band hugs the edge of the Moon — the turquoise fringe. Using measured atmospheric data and ray tracing, we computed it from first principles, then toggled mechanisms like ozone on and off to see why the band is there, why it's so faint, and why it's so narrow.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Lunar Eclipse Turquoise Fringe · Computing that cyan band">
+  <meta property="og:description" content="During a total lunar eclipse, a thin cyan band hugs the edge of the Moon — the turquoise fringe. Using measured atmospheric data and ray tracing, we computed it from first principles, then toggled mechanisms like ozone on and off to see why the band is there, why it's so faint, and why it's so narrow.">
+  <meta property="og:url" content="https://grapeot.github.io/turquoise_band/">
+  <meta property="og:image" content="https://grapeot.github.io/turquoise_band/assets/hero_moon_rt.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <title>Lunar Eclipse Turquoise Fringe · Computing that cyan band</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060504;
+      --panel: #14100d;
+      --text: #ede7e0;
+      --muted: #a89c91;
+      --line: rgba(208, 191, 178, 0.18);
+      --copper: #c98a5e;
+      --teal: #8fd2c9;
+      --max: 1180px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 74% 4%, rgba(143, 210, 201, 0.07), transparent 34rem),
+        radial-gradient(circle at 10% 30%, rgba(160, 84, 48, 0.10), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    img,
+    video {
+      display: block;
+      max-width: 100%;
+    }
+
+    img {
+      height: auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 8, 6, 0.96);
+    }
+
+    .topbar-inner {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      margin: -10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(201, 138, 94, 0.62);
+      border-radius: 50%;
+      background: radial-gradient(circle at 38% 50%, rgba(150, 60, 32, 0.9) 0 7px, transparent 8px), radial-gradient(circle at 72% 50%, rgba(143, 210, 201, 0.85) 0 3px, transparent 4px);
+      box-shadow: 0 0 16px rgba(201, 138, 94, 0.22);
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .nav a:hover,
+    .repo-link:hover {
+      color: var(--text);
+    }
+
+    a:focus-visible,
+    button:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 4px;
+    }
+
+    .repo-link {
+      border: 1px solid rgba(201, 138, 94, 0.52);
+      border-radius: 999px;
+      padding: 7px 13px;
+      color: #d8a376;
+      background: rgba(201, 138, 94, 0.08);
+    }
+
+    main {
+      overflow: hidden;
+    }
+
+    .section {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 88px 0;
+      scroll-margin-top: 24px;
+    }
+
+    .hero {
+      width: min(1320px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 64px 0 44px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 520px);
+      gap: 44px;
+      align-items: center;
+      min-height: calc(100vh - 64px);
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--copper);
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.14;
+    }
+
+    h1,
+    h2 {
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 780px;
+      font-size: clamp(40px, 6.4vw, 84px);
+      font-weight: 700;
+    }
+
+    h2 {
+      max-width: 820px;
+      font-size: clamp(30px, 4.6vw, 54px);
+      font-weight: 700;
+    }
+
+    h3 {
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    .lead {
+      max-width: 720px;
+      margin: 28px 0 0;
+      color: #d8cec4;
+      font-size: clamp(18px, 2vw, 22px);
+    }
+
+    .hero-actions,
+    .section-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .button.primary {
+      border-color: rgba(201, 138, 94, 0.74);
+      background: #c98a5e;
+      color: #16100b;
+    }
+
+    .hero-plate {
+      position: relative;
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #060403;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.48);
+    }
+
+    .hero-plate img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+    }
+
+    .plate-caption {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(10, 7, 5, 0.92);
+      color: #e0d6cb;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .stat {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .stat strong {
+      display: block;
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .intro-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 34px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 24px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.026));
+    }
+
+    .copy {
+      max-width: 760px;
+    }
+
+    .card p,
+    .copy p,
+    .note p {
+      margin: 12px 0 0;
+      color: #d3c8bc;
+    }
+
+    .note-copy {
+      margin: 4px 0 0;
+      color: #d3c8bc;
+      font-size: 15px;
+    }
+
+    .wide-figure {
+      margin: 34px 0 0;
+    }
+
+    .wide-figure img {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #060403;
+    }
+
+    .wide-figure figcaption {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .controls {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+      background: var(--panel);
+      margin-top: 34px;
+    }
+
+    .step-explorer {
+      display: grid;
+      grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+      gap: 26px;
+      align-items: start;
+      margin-top: 8px;
+    }
+
+    .slice-hint {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .step-slices {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .step-slice {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      width: 100%;
+      height: 52px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0;
+      background-color: #070504;
+      background-position: center 40%;
+      background-size: cover;
+      cursor: pointer;
+      transition: border-color 160ms ease, filter 160ms ease;
+      filter: saturate(0.9) brightness(0.8);
+      text-align: left;
+    }
+
+    .step-slice::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(6, 5, 4, 0.9), rgba(6, 5, 4, 0.4) 45%, rgba(6, 5, 4, 0.74));
+    }
+
+    .step-slice:hover {
+      filter: saturate(1) brightness(0.95);
+    }
+
+    .step-slice.active {
+      border-color: rgba(201, 138, 94, 0.78);
+      filter: saturate(1) brightness(1.05);
+    }
+
+    .step-slice[data-level="4"].active {
+      border-color: rgba(143, 210, 201, 0.78);
+    }
+
+    .slice-meta {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 14px;
+      align-items: center;
+      min-height: 52px;
+      padding: 10px 16px;
+      color: var(--text);
+    }
+
+    .slice-index {
+      color: var(--copper);
+      font: 700 14px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .slice-title {
+      font-weight: 600;
+      font-size: 16px;
+    }
+
+    .step-viewer {
+      margin: 0;
+    }
+
+    .step-viewer img {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #050302;
+    }
+
+    .step-current {
+      margin-top: 14px;
+      color: #d3c8bc;
+      font-size: 15px;
+      min-height: 6.5em;
+    }
+
+    .media-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      background: var(--panel);
+      margin-top: 34px;
+    }
+
+    .media-card video {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      background: #000;
+    }
+
+    .media-body {
+      padding: 26px;
+    }
+
+    .pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 34px;
+      align-items: start;
+    }
+
+    .pair figure {
+      margin: 0;
+    }
+
+    .pair a {
+      display: block;
+    }
+
+    .pair img {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #060403;
+    }
+
+    .pair figcaption {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .boundary {
+      display: grid;
+      grid-template-columns: 0.8fr 1.2fr;
+      gap: 24px;
+      align-items: stretch;
+    }
+
+    .boundary-aside {
+      border: 1px solid rgba(201, 138, 94, 0.42);
+      border-radius: 16px;
+      padding: 26px;
+      background: rgba(201, 138, 94, 0.08);
+    }
+
+    .boundary-aside strong {
+      display: block;
+      font-size: 42px;
+      line-height: 1.15;
+      color: var(--copper);
+    }
+
+    .repo-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 30px;
+      background: linear-gradient(135deg, rgba(143, 210, 201, 0.08), rgba(201, 138, 94, 0.07));
+    }
+
+    code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #e6ddd1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    footer {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 42px 0 60px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 14px;
+    }
+
+    .footer-nav a {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .footer-nav a:hover {
+      color: var(--text);
+    }
+
+    @media (max-width: 900px) {
+      .nav a.hide-mobile {
+        display: none;
+      }
+
+      .hero,
+      .boundary,
+      .repo-panel,
+      .step-explorer {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        min-height: 0;
+      }
+
+      .hero-plate {
+        max-width: 460px;
+        margin: 0 auto;
+      }
+
+      .intro-grid,
+      .stats,
+      .pair {
+        grid-template-columns: 1fr;
+      }
+
+      .step-viewer {
+        max-width: 460px;
+        margin: 0 auto;
+        width: 100%;
+      }
+
+      .repo-panel .button {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .section {
+        padding: 64px 0;
+      }
+
+      .topbar-inner {
+        min-height: 58px;
+      }
+
+      .brand-text {
+        display: none;
+      }
+
+      .plate-caption {
+        position: static;
+        margin: 0;
+        border: 0;
+        border-top: 1px solid var(--line);
+        border-radius: 0;
+      }
+
+      .slice-meta {
+        grid-template-columns: 64px 1fr;
+        gap: 10px;
+        padding: 12px 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top" aria-label="Back to top">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">Lunar Eclipse Turquoise Fringe</span>
+      </a>
+      <nav class="nav" aria-label="Page navigation">
+        <a class="hide-mobile" href="#hook">Saturated blue mystery</a>
+        <a class="hide-mobile" href="#ablation">Six-step ablation</a>
+        <a class="hide-mobile" href="#dual">Dual viewpoint</a>
+        <a class="hide-mobile" href="#cliff">Brightness cliff</a>
+        <a class="hide-mobile" href="#boundary">Scientific boundary</a>
+        <a href="principles-en.html">Principles</a>
+        <a href="index.html">中文</a>
+        <a class="repo-link" data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub repo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow">Driven by measured atmospheric data, ray-by-ray tracing through millions of paths — every pixel of the Moon's color is computed, not photographed.</p>
+        <h1 id="hero-title">During a total lunar eclipse, a thin cyan band hugs the edge of the Moon.</h1>
+        <p class="lead">That band has a name: the turquoise fringe. It sits between the coppery red of the blood Moon and the bright white of the full Moon, appearing as an extremely faint cyan layer. Instead of photographing it to prove it's there, we went the other way: using measured atmospheric data, we ray-traced the refraction of millions of sunlight rays passing through Earth's atmosphere and computed this band from first principles. The process broke several times, and each failure forced us to fill in a missing piece of physics. At the end, we gained something no photograph can give you: the ability to switch ozone off inside the model and see whether the band disappears.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#ablation">See the six-step computation</a>
+          <a class="button" data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub repo</a>
+        </div>
+        <div class="stats" aria-label="Project summary">
+          <div class="stat"><strong>−15 stops</strong><span>Umbral-core brightness relative to the un-eclipsed full Moon (photopic passband, default physical configuration with background aerosol)</span></div>
+          <div class="stat"><strong>R/B 0.81</strong><span>Red-to-blue ratio at the band's bluest point (raw sRGB passband, at 41′): a faint cyan tint, nowhere near saturated blue</span></div>
+          <div class="stat"><strong>32′ vs. 4′</strong><span>Solar angular diameter vs. turquoise-band angular width: the convolution kernel is wider than the signal itself — the Sun's finite size rewrites the band's color</span></div>
+        </div>
+      </div>
+      <figure class="hero-plate">
+        <img src="assets/hero_moon_rt.jpg" alt="Ray-traced render of an eclipsed lunar disk: the left side sits deep in the umbra in dark coppery red, a cool grey-cyan transition band sits just left of center, and the right limb approaches the white of normal moonlight">
+        <figcaption class="plate-caption">Ray-traced rendering of the eclipsed lunar disk (center-to-umbra-center distance: 40′). The left half sits deep in the umbra, showing coppery red; the right limb lies in the penumbra, close to normal moonlight; just left of center, that cool grey-cyan sliver is the turquoise fringe. Every pixel's color comes from ray-tracing — no post-processing color grading of any kind.</figcaption>
+      </figure>
+    </section>
+
+    <section class="section" aria-labelledby="questions-title">
+      <p class="eyebrow">Three counterintuitive things. You'll understand them by the time you finish this page.</p>
+      <h2 id="questions-title">Ozone makes the turquoise fringe — but it's only half the story.</h2>
+      <div class="intro-grid">
+        <article class="card">
+          <h3>Why is it a narrow band? Why doesn't the whole inner umbral edge turn cyan?</h3>
+          <p>The most common science-outreach explanation blames ozone's Chappuis absorption band: it gobbles up orange-red sunlight between 500 and 650 nm, leaving blue-green light to pass through. The chemistry is correct, but it can't explain one crucial observation — the color shift that ozone produces spans a smooth gradient over a dozen arcminutes across the lunar disk. If you looked at color alone, the entire umbral boundary should appear as a broad pale-cyan wash. The band looks narrow because of brightness, not color. The Brightness Cliff section below finishes this story.</p>
+        </article>
+        <article class="card">
+          <h3>Why does the turquoise fringe vanish at the deepest moment of totality?</h3>
+          <p>Deep inside the umbra, the sunlight grazing Earth passes through the lower atmosphere. Down there, Rayleigh scattering strips away blue light completely — atmospheric molecules scatter shorter wavelengths far more efficiently — so only red light punches through. Cyan emerges higher up: when the grazing altitude climbs into the stratosphere, ozone's color control overpowers Rayleigh scattering, and blue-green light finally gets a chance to leak through. On the Moon, this altitude window maps right onto the umbral edge. So when the blood Moon is at its deepest, reddest point, the turquoise fringe is actually waiting just outside the lunar disk — it never got the invitation.</p>
+        </article>
+        <article class="card">
+          <h3>Why do lunar eclipse photos online look so much bluer?</h3>
+          <p>Satellite measurements give red-to-blue ratios between 0.8 and 1.0. What that actually looks like is an extremely faint cyan tint — borderline invisible to the naked eye. Those online images where half the disk sits in saturated blue are the product of post-processing: capture multiple exposures at different settings, stack them into a single HDR composite, then crank the cyan channel saturation way up in the HSL panel. We verified this against the physics — next section digs in.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="hook" class="section" aria-labelledby="hook-title">
+      <p class="eyebrow">First faceplant: treating a viral photo as ground truth</p>
+      <h2 id="hook-title">That half-disk-bathed-in-saturated-blue look — we couldn't make it happen, no matter what we tried.</h2>
+      <div class="copy">
+        <p>Midway through the project, we came across a widely circulated eclipse photo with a blue band: half the lunar disk submerged in a dense, saturated blue. We used that as a reference and kept re-running the model, but all we ever got was a faint cyan wash. At one point we genuinely suspected we'd overlooked some physical mechanism. Then we traced the photo back to its source — the author is a landscape-photography post-processing tutor, and the post's title literally spells out the editing pipeline: HDR stacking across multiple exposures, then pulling the cyan channel saturation up in HSL until it hits near-neon territory. The same kind of creator has even said in tutorials that this blue is nearly imperceptible to the naked eye and only shows up once HDR drags out colors that would otherwise go unnoticed.</p>
+        <p>On the physics side, the clues pointed in another direction. GOES-16 weather satellite measurements during lunar eclipses give red-to-blue ratios in the 0.8 to 1.0 range. In unprocessed professional astrophotography frames, the blue band is nothing more than a thin pale-cyan ribbon clinging to the Moon's edge. We never altered any physical parameter to chase that viral photo, and the measured data has since lined up with our results, piece by piece.</p>
+        <p>Amusingly, our own model did briefly spit out that intense cyan. When we treated the Sun as a point source — a simplification, of course — the model produced a band that was vivid and sharp, with the bluest point hitting an R/B ratio as low as 0.41. The moment we restored the Sun's real 32′ angular-diameter disk, the intense cyan got smeared out into a soft-edged pale cyan, the R/B ratio retreated to 0.71, and the result matched real photos. In other words, that viral-photo blue really does exist in an imaginary point-source world — it's just that our Sun is not a point, and it doesn't play along.</p>
+        <p>Human vision adds another layer. The band's absolute chromaticity really is blue-leaning: no matter how you tune the model — remove Rayleigh scattering, add aerosols, simulate the backfill from multiple scattering — it never turns teal. The reason people perceive it as cyan or greenish is the massive field of warm red from the blood Moon next to it; once your visual system chromatically adapts to that warm surround, a relatively cooler band reads as cyan-green. "Turquoise" is a relative color. We never bolted any extra mechanism onto the model to make it turn green in an absolute sense.</p>
+      </div>
+      <figure class="wide-figure">
+        <img src="assets/compare_pointsource_vs_disk.jpg" alt="Two lunar disks compared: left shows the point-source approximation with a dense, sharp cyan band; right shows the real solar-disk physics with a faint, soft-edged pale cyan band" width="1690" height="884" loading="lazy">
+        <figcaption>Left: result with the Sun treated as a point source, R/B ratio 0.41 at the bluest point (at 52.6′), saturated cyan, crisp edges. Right: ray-traced result with the full 32′ solar disk, R/B ratio 0.71 (at 40.4′), pale cyan, soft edges. Passband: linear sRGB R/B ratio, molecular atmosphere (no aerosol); both panels shown with enhanced contrast for display.</figcaption>
+      </figure>
+    </section>
+
+    <section id="ablation" class="section" aria-labelledby="ablation-title">
+      <p class="eyebrow">Core experiment · each step stacks exactly one physical mechanism</p>
+      <h2 id="ablation-title">Six steps, building up the turquoise fringe layer by layer.</h2>
+      <div class="controls">
+        <p class="note-copy">The starting point is a featureless grey disk. With each step forward, we add one real physical mechanism to the model and watch the lunar disk transform from a fake full Moon into what it looks like during an eclipse. This series of toggle switches also provides something a camera never can: counterfactual attribution. At Step 4, turn ozone on — the band appears. Step back to Step 3 — you've just switched ozone off — the band vanishes. Only computation can confirm causality like this. All six panels share the same contrast-enhancement parameters so the differences between steps are easy to read; a version rendered under faithful exposure lives in the Brightness Cliff section.</p>
+        <div class="step-explorer">
+          <div>
+            <h3 id="stepName">Step 1: A grey disk</h3>
+            <p class="step-current" id="stepCopy" aria-live="polite"></p>
+            <p class="slice-hint">↓ Click any step — the right panel updates instantly</p>
+            <div class="step-slices" id="stepSlices" role="group" aria-label="Six-step mechanism selector"></div>
+          </div>
+          <figure class="step-viewer">
+            <img id="stepImage" src="assets/ablation_step_1.jpg" alt="Step 1: a grey-white full-Moon disk with lunar mare texture">
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section id="dual" class="section" aria-labelledby="dual-title">
+      <p class="eyebrow">Same physics, flipped perspective</p>
+      <h2 id="dual-title">Stand on the Moon and look at Earth — you're watching a total solar eclipse.</h2>
+      <p class="lead" style="max-width:780px">During a total lunar eclipse, if you stand on the lunar surface and look toward Earth, the planet's night side completely covers the Sun, leaving only a ring of atmosphere-lit glow circling Earth's limb. These two viewpoints are two expressions of the same radiative-transfer physics: the color at any point on the Moon equals the color of the atmospheric ring you'd see looking up from that spot. The turquoise fringe at the Moon's edge corresponds to a small cyan segment on the sunward side of Earth's atmospheric ring, at stratospheric altitude.</p>
+      <div class="media-card">
+        <video controls playsinline preload="metadata" poster="assets/eclipse_video_poster.jpg">
+          <source src="assets/eclipse_video_preview.mp4" type="video/mp4">
+          <p style="margin:16px; color:#d3c8bc">Your browser does not support embedded video. You can <a href="assets/eclipse_video_preview.mp4" style="text-decoration:underline">download it directly</a>.</p>
+        </video>
+        <div class="media-body">
+          <h3>Four-panel sequence of the Moon crossing the umbra</h3>
+          <p style="margin:12px 0 0; color:#d3c8bc">The video follows the Moon's center as the umbra-center distance pushes from 10′ to 60′. Panel 1 (top left) shows the lunar disk, starting from the deepest bronze blood Moon, crossing the terminator, and entering the penumbra's bright white zone. Panel 2 (top right) shows the Earthward view from the Moon: Earth's night side blocks the Sun, and the illuminated segment of the atmospheric ring rotates with the changing geometry — the moment the Moon exits the umbra coincides with the diamond-ring effect as the Sun peeks out from behind Earth's limb. Panel 3 (bottom left) gives a zoomed-in look at the atmospheric ring; the ring's true thickness is only about 1.3% of Earth's angular diameter, so it's shown with exaggerated scale. Panel 4 (bottom right) explains the spectral origin of the turquoise fringe: how Rayleigh scattering, ozone Chappuis absorption, and the transmission window shift as the sunlight's grazing altitude changes. The video has no audio.</p>
+        </div>
+      </div>
+      <figure class="wide-figure">
+        <img src="assets/eclipse_composite.jpg" alt="Artistic composite of a lunar eclipse trajectory: the Moon traces a diagonal path across the frame, going from full-Moon white through grey-cyan and deep coppery red and back to full-Moon white" width="2158" height="1353" loading="lazy">
+        <figcaption>Compressing an entire lunar eclipse into a single frame: the Moon follows its orbit through Earth's umbra, passing through the turquoise fringe once on the way in and once on the way out. This is an artistic composite — composition and tonality were adjusted, and luminance relationships have been compressed. Do not treat it as photometric data.</figcaption>
+      </figure>
+    </section>
+
+    <section id="cliff" class="section" aria-labelledby="cliff-title">
+      <p class="eyebrow">The faceplant that decided everything</p>
+      <h2 id="cliff-title">The band is narrow because of brightness.</h2>
+      <div class="copy">
+        <p>For a long time, we tunneled on the color dimension, obsessing over how wide the band really is. The literature says it spans only a few percent of the lunar disk diameter, but our renders showed it sprawled across nearly a third of the Moon. So we rechecked ozone parameters, geometry, color science — over and over. It took us a while to realize the failure was in exposure. Our early renders artificially boosted umbral brightness to make the dark regions visible. The blue zone is already quite dim; once you yank the brightness up, it spreads into a broad gradient band. This wasn't a physics mistake — it was a display-strategy artifact.</p>
+        <p>The real mechanism is a brightness cliff. The band's bluest point sits right in a luminance trough. Immediately next to it, the region that transitions toward normal bright moonlight starts receiving direct sunlight from the penumbra, and the brightness shoots up violently. On our model card, photopic surface luminance climbs from 10% to 90% of the full Moon's value over just 20.4′ of angular distance (from 46.7′ to 67.1′); at the steepest part of the umbral boundary, the brightness gradient hits 1.8 stops per arcminute. The turquoise fringe you can actually see is the tiny intersection where two conditions hold simultaneously — the color is blue enough <em>and</em> the brightness is high enough — squeezed into a narrow sliver by this cliff. The color gradient along the disk is smooth, and what you actually see is a sharp-edged band. These two facts are not in conflict.</p>
+        <p>This faceplant left us with two takeaways. First, your choice of exposure and tone-mapping strategy is fully capable of misleading you about the underlying physics: when a render looks wrong, the first thing to do is separate whether the physics is wrong from whether the display is lying to you. Second, this brightness curve also answers why there's no turquoise fringe at the deepest moment of totality: the umbral core sits more than ten stops below full-Moon brightness, the sunlight's grazing altitude is too low for ozone to matter, and cyan only lives in that narrow slit along the brightness cliff.</p>
+      </div>
+      <div class="pair">
+        <figure>
+          <a href="assets/moon_brightness_cliff.png" target="_blank" rel="noopener"><img src="assets/moon_brightness_cliff.png" alt="Two exposure strategies compared: exposing for the shadows makes the blue band appear to cover most of the disk; faithful exposure narrows it to a thin ribbon; curves below show the red-blue ratio and luminance along the lunar disk" width="1476" height="1005" loading="lazy"></a>
+          <figcaption>Same physical model, two exposure strategies. Left: exposure compensated for the shadows — the blue zone gets lifted and appears broad. Right: a faithful-exposure version, metered for the brightest part of the disk — the blue band is pinned down by the surrounding brightness and narrows into a thin ribbon, consistent with the literature and real photos. Curves below: R/B ratio (purple) is a smooth gradient; luminance (orange) bottoms out right where the band sits. Click image to open full resolution in a new tab.</figcaption>
+        </figure>
+        <figure>
+          <a href="assets/photometric_profile.png" target="_blank" rel="noopener"><img src="assets/photometric_profile.png" alt="Lunar eclipse photometric profile: from about −15.5 stops at the umbral center, climbing gently, then steeply near 41 arcminutes, reaching full-Moon 0 stops at 73 arcminutes" width="1200" height="1200" loading="lazy"></a>
+          <figcaption>Ray-traced luminance profile. Reference 0 stops = un-eclipsed full Moon. Inside the umbra, a gentle slope of refracted light; near the 41′ umbral boundary, a steep climb; then direct sunlight gradually fills back in through the penumbra, transitioning smoothly to full-Moon brightness at 73′. The curve is computed from stratified sampling of 16 million rays; the center reads −15.5 stops. The model card's baseline run (4 million rays) gives −15.1 stops at the center — the difference comes from statistical fluctuations in a few annuli near the center. Click image to open full resolution in a new tab.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section id="boundary" class="section boundary" aria-labelledby="boundary-title">
+      <aside class="boundary-aside">
+        <strong>Scientific boundaries</strong>
+        <p>This model has a defined domain of applicability. Three open issues are laid out plainly here.</p>
+      </aside>
+      <div class="copy">
+        <p class="eyebrow">What matched, what didn't — all on the table</p>
+        <h2 id="boundary-title">Everything that lines up and everything that doesn't, transparently laid out.</h2>
+        <p>Three things match. First, the computed refraction geometry deviates from Mallama 2021's tabulated values by less than 2% across the mid-to-high grazing altitudes where the band lives. Second, the band's R/B ratio at its bluest point falls in the same ballpark as satellite measurements — both in the 0.8–1.0 pale-cyan range (the two measurements use different passbands; a detailed item-by-item reconciliation is documented in the second open issue below). Third, the band hugs the umbral boundary, appears pale cyan, and is narrow — consistent with what's seen in unprocessed professional astrophotography frames.</p>
+        <p>The first mismatch lies at the dark end. Our model's umbral center measures roughly −15 stops, a figure built on the clearest possible sky conditions with the addition of climatological background aerosol (pure molecular atmosphere with zero aerosol gives a theoretical upper bound of −13.5 stops). Mallama's clear-sky empirical extinction model reports the umbral center at −18.7 stops (disk-integrated) to −20.5 stops (resolved-disk V-band). Both models are called "clear-sky," but their results differ by several stops. One root cause is that "clear-sky" does not mean the same thing across the two models: the slant path of grazing sunlight through Earth's atmosphere corresponds to 40–60 airmasses, so even a tiny difference in background-aerosol values gets amplified massively. This discrepancy remains open.</p>
+        <p>The second mismatch involves satellite narrowband measurement passbands. Shu 2024, using the GF-4 satellite, captured a narrow ribbon with R/B &lt; 1 at the umbral boundary, with a radial full width of 120–190 km. We re-ran our model under the same passband and couldn't reproduce this ribbon: single-layer physics can generate a narrow-band dip, but the 32′ solar disk's convolution effect and the red light flowing in from the umbral core wipe it out. We ran a sensitivity analysis that ruled out aerosol parameters and deep red light as suspects in turn. The strongest candidate explanation at this point is that the red shoulder light in the 8–19 km tangent-altitude range lacks sufficient extinction — a possible source being thin cirrus at the tropopause, which our model does not include, while the actual cloud conditions on the night of that eclipse are no longer recoverable. On top of that, three passband differences are in play: differences in satellite spectral response, ±15% lunar-albedo variation, and the mismatch between 2D boundary measurement and 1D radial averaging. Any single one of these three, taken alone, is enough to flip the verdict.</p>
+        <p>The third item is an explicit negative boundary the model claims for itself: it cannot predict whether the next lunar eclipse will look bright or dark. That depends on stratospheric aerosol conditions at the time of the eclipse — a total lunar eclipse following a major volcanic eruption can be several stops darker than one during a quiet year. The model provides the physical mechanism and a brightness floor under the clearest conditions; it is not a forecasting tool.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="principles-title">
+      <p class="eyebrow">For those who want to dig deeper</p>
+      <h2 id="principles-title">How were these images computed?</h2>
+      <p class="lead" style="max-width:780px">These images don't rely on texture-map color grading, and no phenomenological fitting parameters were stuffed in anywhere. Refraction is computed by numerical integration of every single ray; extinction is accumulated along the bent path using measured cross-section data; ray focusing and defocusing emerge from the landing-point density of millions of rays striking the lunar disk. The deep-dive principles page covers six key technical decisions, reconciliation results against three sets of literature data, the key numbers on the model card, and reproducible commands for every figure.</p>
+      <div class="section-actions">
+        <a class="button primary" href="principles-en.html">Read the in-depth principles</a>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="repo-title">
+      <div class="repo-panel">
+        <div>
+          <p class="eyebrow">For those who want to get their hands dirty</p>
+          <h2 id="repo-title">The entire project is open source. Reproduce it on your own machine.</h2>
+          <p class="lead">The code, the data-download scripts, and every parameter are all in the repository. You can re-render every image and video on this page, or flip every physics switch back and forth to run your own counterfactual experiments — try swapping the ozone column density for a different season's value and watch the band's color shift.</p>
+        </div>
+        <a class="button primary" data-repo-link href="https://github.com/grapeot/turquoise_band">Open the GitHub repository</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p class="footer-nav"><a href="#top">↑ Back to top</a> · <a href="principles-en.html">In-depth principles</a> · <a data-repo-link href="https://github.com/grapeot/turquoise_band">GitHub repository</a></p>
+    <p>Lunar eclipse turquoise fringe · Atmospheric and ozone data from AFGL profiles and Serdyuchenko 2014 measured cross-sections · Images shown on this page are compressed previews; full-resolution figures and videos can be generated using the commands in the repository.</p>
+  </footer>
+
+  <script>
+    const stepTexts = [
+      ["Step 1: A grey disk", "Start with the Moon as a flat grey disk, then multiply by NASA's measured lunar albedo texture — the brightness distribution of different regions across the lunar surface. There's no eclipse physics in this step at all; it's just a full Moon. The starting point is absurdly crude, but it's the canvas on which every change in the steps ahead gets painted."],
+      ["Step 2: Geometric shadowing", "The intuitive-but-wrong version: Earth blocks the Sun, so the umbra should be pitch black. Run that logic and you get the Moon sliced into a hard-edged black-and-white half. Real lunar eclipses never show a geometric hard edge like this. First faceplant: a missing physical mechanism — atmospheric refraction. Earth's atmosphere acts like a lens, bending grazing sunlight into the umbra."],
+      ["Step 3: Refraction and Rayleigh scattering", "Earth's atmosphere behaves like a ring-shaped lens wrapped around the planet. Sunlight that would have skimmed past gets bent inward and dumped into the umbra. Rayleigh scattering in the lower atmosphere has a distinctive signature: scattering intensity is inversely proportional to the fourth power of wavelength — the shorter the wavelength, the harder it gets scattered. Blue light is almost entirely stripped out at this stage; only longer-wavelength red light punches through, staining the umbra coppery red. The blood Moon arrives right here."],
+      ["Step 4: Ozone", "A saturated cyan band emerges along the umbral edge. Ozone's Chappuis absorption band eats orange-red light in the 500–650 nm range; sunlight that grazes through at stratospheric altitudes comes out the other side dominated by blue-green light. The counterfactual attribution lives between Steps 3 and 4: switch ozone off and step back — the band disappears. You could shoot ten thousand photos with a camera and never confirm causality like this."],
+      ["Step 5: The solar disk", "This step is the reversal. The first four steps treated the Sun as a luminous point, and that saturated cyan band was an artifact. The Sun's true angular diameter is 32 arcminutes — roughly five times wider than the turquoise band itself. It's like dragging a brush fatter than the object you're painting; the detail gets smeared. The R/B ratio at the bluest point softens from 0.41 to 0.71, and the bluest location shifts from 52.6′ to 40.4′. What was a crisp boundary becomes a soft transition (molecular-atmosphere passband). The real-world band is pale cyan."],
+      ["Step 6: Full-physics ray tracing", "Every approximation we used in the earlier steps gets stripped out. Refraction is no longer estimated by formula — each ray gets numerical integration via RK4. Extinction accumulates stepwise along the bent path. Ray focusing and defocusing are no longer assumed; they emerge naturally from the landing-point density of millions of rays hitting the lunar disk. On top of that, we add direct sunlight in the penumbra, a measured solar spectrum, dispersion from refraction, background aerosol, and solar limb darkening. After this round, the umbral core is far darker than the previous step (center roughly −15 stops, default physical passband), and the turquoise band itself is even more subdued. This is what the physics spits out. We added no saturation anywhere."]
+    ];
+
+    const stepAlts = [
+      "Step 1: a grey-white full-Moon disk with lunar mare texture",
+      "Step 2: the lunar disk split into a black-and-white half by a hard edge",
+      "Step 3: the umbral side takes on the coppery red of a blood Moon",
+      "Step 4: a saturated cyan band appears along the umbral edge (enhanced display)",
+      "Step 5: the cyan band turns pale with soft edges (enhanced display)",
+      "Step 6: full ray tracing — the umbral core is noticeably darker and the cyan band is faint"
+    ];
+
+    const stepName = document.getElementById("stepName");
+    const stepCopy = document.getElementById("stepCopy");
+    const stepSlices = document.getElementById("stepSlices");
+    const stepImage = document.getElementById("stepImage");
+
+    function setStep(level) {
+      const n = Number(level);
+      stepName.textContent = stepTexts[n - 1][0];
+      stepCopy.textContent = stepTexts[n - 1][1];
+      stepImage.src = `assets/ablation_step_${n}.jpg`;
+      stepImage.alt = stepAlts[n - 1];
+      document.querySelectorAll(".step-slice").forEach((button) => {
+        const active = Number(button.dataset.level) === n;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
+    }
+
+    const stepShort = ["Grey disk", "Geometric shadow", "Refraction + Rayleigh", "Ozone", "Solar disk", "Full ray tracing"];
+    for (let n = 1; n <= 6; n += 1) {
+      const button = document.createElement("button");
+      button.className = "step-slice";
+      button.type = "button";
+      button.dataset.level = String(n);
+      button.style.backgroundImage = `url("assets/ablation_step_${n}.jpg")`;
+      button.setAttribute("aria-label", `View ${stepTexts[n - 1][0]}`);
+      button.setAttribute("aria-pressed", "false");
+      button.innerHTML = `<span class="slice-meta"><span class="slice-index">Step ${n}</span><span class="slice-title">${stepShort[n - 1]}</span></span>`;
+      button.addEventListener("click", () => setStep(n));
+      stepSlices.appendChild(button);
+    }
+
+    setStep(1);
+
+    const repoLinks = document.querySelectorAll("[data-repo-link]");
+    const pathRepo = location.hostname.endsWith("github.io") ? location.pathname.split("/").filter(Boolean)[0] : "";
+    const owner = location.hostname.endsWith("github.io") ? location.hostname.split(".")[0] : "grapeot";
+    if (pathRepo) {
+      repoLinks.forEach((link) => {
+        link.href = `https://github.com/${owner}/${pathRepo}`;
+      });
+    }
+  </script>
+</body>
+</html>
