@@ -284,7 +284,7 @@ python -m pytest src/tests/ -v</code></pre>
     <h2>踩坑全记录在哪里</h2>
     <p>这一页展示的是管线的最终形态，但走到这一步之前，路上走过的弯路比结果本身有意思得多。举两个例子。第一个：我们曾经为了修正一个根本不存在的 bug，发明了一条有错的折射公式。这条公式把青带推到了一个直觉上看起来更对的位置，带着一种问题已解决的自信，它在代码里存活了整整一天。直到我们和文献逐行对账时才发现它是错的，当场删除。一个错误的修正，比错误本身要危险得多。第二个：有一段时间，CIELAB 色相角显示青带偏蓝程度很高，我们差点因为这个信号去改动物理模型。最后查出来，CIELAB 这个色彩度量本身把温和的偏蓝放大了，物理模型没有问题。从那以后我们形成了一个原则：色相对不上时，先怀疑度量工具，再怀疑物理模型。</p>
     <div class="note">
-      <p>全部坑的根因和解法在仓库的 <a data-repo-doc="docs/PHYSICS_AND_PITFALLS.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/PHYSICS_AND_PITFALLS.md">docs/PHYSICS_AND_PITFALLS.md</a>，逐日的工作记录与每次勘误在 <a data-repo-doc="docs/working.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/working.md">docs/working.md</a>。文献出处：Mallama 2021/2022（arXiv:2112.08966）、Shu et al. 2024（Remote Sensing 16(22):4181）、Serdyuchenko et al. 2014 臭氧截面、AFGL 大气廓线、SAO2010 太阳谱。</p>
+      <p>全部坑的根因和解法在仓库的 <a data-repo-doc="docs/PHYSICS_AND_PITFALLS.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/PHYSICS_AND_PITFALLS.md">docs/PHYSICS_AND_PITFALLS.md</a>，逐日的工作记录与每次勘误在 <a data-repo-doc="docs/working.md" href="https://github.com/grapeot/turquoise_band/blob/master/docs/working.md">docs/working.md</a>。文献出处：<a href="https://arxiv.org/abs/2112.08966">Mallama 2021/2022</a>（arXiv:2112.08966）、<a href="https://www.mdpi.com/2072-4292/16/22/4181">Shu et al. 2024</a>（Remote Sensing 16(22):4181）、Serdyuchenko et al. 2014 臭氧截面、AFGL 大气廓线、SAO2010 太阳谱。</p>
     </div>
   </main>
 
